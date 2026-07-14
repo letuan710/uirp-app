@@ -1,0 +1,38 @@
+# UIRP config mẫu — copy thành config.toml rồi chỉnh.
+# KHÔNG đặt secret ở đây (STD4-R7). API key đọc từ biến môi trường ANTHROPIC_API_KEY.
+
+[api]
+backend = "claude_agent_sdk"  # mặc định: dùng gói thuê bao Claude qua Claude Code (OI-8)
+                              # đổi "api_key" khi muốn trả theo token (đọc env ANTHROPIC_API_KEY)
+
+[models]                      # mapping tier → model, đổi không cần sửa code (CHR-054)
+tier_s = "claude-haiku-4-5"   # việc rẻ: normalize, lọc thô, đọc ảnh đơn giản
+tier_m = "claude-sonnet-5"    # extraction claim/entity/relationship, dịch
+tier_l = "claude-opus-4-8"    # chỉ khi Owner yêu cầu (--tier L)
+
+[ocr]
+backend = "claude_vision"     # mặc định (ADR-005/ARC-009b); đổi "local_ocr" khi ảnh nhiều
+
+[budget]
+# Mặc định KHÔNG giới hạn (OI-3, CHR-055). Bỏ comment để bật Budget Guard:
+# max_usd_per_day = 5.0
+
+[quota]
+default_wait_seconds = 3600   # chờ khi hết quota mà không có retry-after (CHR-057)
+
+[jobs]
+max_retry = 3                 # số lần retry lỗi tạm trước khi FAILED (STD4-R6)
+running_timeout_minutes = 30  # job RUNNING quá hạn coi như crash → trả PENDING (ARC edge case)
+
+[fetch]                       # Mode B — Playwright (ADR-002/007)
+mode = "cdp"                  # "cdp" = gắn vào Chrome thật đã đăng nhập (khuyến nghị, ADR-007)
+                              # "launch" = Playwright tự mở (dự phòng)
+cdp_port = 9222
+headless = false              # BẮT BUỘC false khi mode="launch"
+max_pages_per_session = 30
+min_delay_seconds = 20
+max_delay_seconds = 60
+
+[backup]
+dir = "./data/backup"
+remote_enabled = false        # cloud opt-in, mã hóa client-side (ARC-020b)

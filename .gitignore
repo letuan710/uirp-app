@@ -1,0 +1,27 @@
+# UIRP code repo — .gitignore
+# Dữ liệu local KHÔNG BAO GIỜ commit (CHR-052, STD4-R8: chứa evidence + dữ liệu cá nhân)
+/data/
+
+# Secret (STD4-R7)
+.env
+config.toml
+config.local.toml
+
+# Playwright (Mode B) — profile trình duyệt chứa cookie/session
+/browser-profile/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# OS
+Thumbs.db
+.DS_Store
