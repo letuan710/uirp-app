@@ -7,6 +7,7 @@ lang='vi') — gốc tiếng Trung được giữ nguyên (evidence-first). Bả
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,6 +29,23 @@ def make_handler(client: AIClient):
             (obs["id"],),
         ):
             return []
+
+        # Cổng lọc rẻ (STD5-R5): classify tier S TRƯỚC khi tốn bản dịch tier M —
+        # trang video/menu tiếng Trung toàn rác giao diện, không đáng dịch.
+        t = db.query(conn,
+            "SELECT t.name FROM topic t JOIN information_object io ON io.topic_id=t.id "
+            "WHERE io.evidence_id=? LIMIT 1", (obs["evidence_id"],))
+        rel = client.complete(
+            AIRequest(tier="S", prompt_ref="classify_relevance",
+                      payload={"text": obs["content"], "topic": t[0]["name"] if t else ""},
+                      expect_json=True),
+            conn, job_id,
+        )
+        try:
+            if not bool(json.loads(rel.text).get("relevant", True)):
+                return []
+        except json.JSONDecodeError:
+            pass
 
         resp = client.complete(
             AIRequest(tier="M", prompt_ref="translate", payload={"text": obs["content"]}),

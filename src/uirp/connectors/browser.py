@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import random
 import time
+from urllib.parse import urljoin
 
 from uirp.config import Config
 from uirp.connectors.common import store_and_queue
@@ -44,14 +45,37 @@ _LAUNCH_ARGS = ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 
 
 def _attach(pw, fc: dict):
-    """Trả (context, launched). CDP: gắn Chrome thật. launch: tự mở persistent context."""
+    """Trả (context, launched). CDP: gắn Chrome thật (ít bị chặn hơn — ADR-002/007).
+    Chrome chưa mở debug port → TỰ CHUYỂN sang launch (trình duyệt riêng) để luôn quét được,
+    không bắt Owner phải nhớ mở Chrome trước."""
     if fc["mode"] == "cdp":
-        browser = pw.chromium.connect_over_cdp(f"http://localhost:{fc['cdp_port']}")
-        context = browser.contexts[0] if browser.contexts else browser.new_context()
-        return context, False
-    context = pw.chromium.launch_persistent_context(
-        user_data_dir="./browser-profile", headless=fc["headless"], args=_LAUNCH_ARGS,
-    )
+        try:
+            browser = pw.chromium.connect_over_cdp(f"http://localhost:{fc['cdp_port']}")
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            return context, False
+        except Exception:  # noqa: BLE001 - Chrome thật chưa mở debug port
+            try:
+                print(f"  (không bám được Chrome thật ở cổng {fc['cdp_port']} "
+                      f"→ tự mở trình duyệt riêng)")
+            except UnicodeEncodeError:
+                print(f"  (CDP attach failed on port {fc['cdp_port']} -> fallback to launch)")
+    try:
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir="./browser-profile", headless=fc["headless"], args=_LAUNCH_ARGS,
+        )
+    except Exception as e:  # noqa: BLE001
+        if "Executable doesn't exist" not in str(e):
+            raise
+        # Chromium của Playwright chưa tải (chưa chạy `playwright install chromium`)
+        # → dùng luôn Google Chrome đã cài trên máy (channel="chrome").
+        try:
+            print("  (Chromium của Playwright chưa tải → dùng Google Chrome đã cài trên máy)")
+        except UnicodeEncodeError:
+            print("  (Playwright chromium not downloaded -> using installed Google Chrome)")
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir="./browser-profile", headless=fc["headless"], args=_LAUNCH_ARGS,
+            channel="chrome",
+        )
     return context, True
 
 
@@ -63,8 +87,18 @@ def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
     for _ in range(fc["scroll_depth"]):
         for a in page.query_selector_all("a[href]"):
             href = a.get_attribute("href") or ""
-            if any(h in href for h in hints) and href not in urls:
-                urls.append(href)
+            # href có thể tương đối (vd. "/shorts/") — quy về URL tuyệt đối trước khi lưu,
+            # nếu không page.goto() sau này sẽ báo "invalid URL" (không phải lỗi môi trường).
+            full = urljoin(page.url, href)
+            if p.key == "google":
+                # Máy tìm kiếm: chỉ lấy trang ĐÍCH bên ngoài, loại link nội bộ Google.
+                if (not full.startswith("http")
+                        or any(d in full for d in ("google.", "gstatic.", "googleusercontent."))):
+                    continue
+            elif not any(h in href for h in hints):
+                continue
+            if full not in urls:
+                urls.append(full)
         if len(urls) >= fc["max_posts_per_run"]:
             break
         page.mouse.wheel(0, 3000)

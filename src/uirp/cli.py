@@ -115,6 +115,8 @@ def cmd_check(cfg: config.Config, args: argparse.Namespace) -> int:
 
     has_pw = importlib.util.find_spec("playwright") is not None
     print(f"  [{ok(has_pw)}] Playwright (Mode B tự động — không cần nếu chỉ dùng Mode A)")
+    has_yt = importlib.util.find_spec("yt_dlp") is not None
+    print(f"  [{ok(has_yt)}] yt-dlp (trích nội dung video qua phụ đề — pip install yt-dlp)")
     nt = db.query(conn, "SELECT COUNT(*) n FROM topic")[0]["n"]
     print(f"  [{ok(nt > 0)}] có {nt} chủ đề; {len(platforms.all_platforms())} nền tảng khai báo")
     conn.close()

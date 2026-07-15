@@ -1,6 +1,20 @@
-"""Tiện ích text nhỏ (stdlib, P14). Phát hiện tiếng Trung để tự dịch (ADR-009)."""
+"""Tiện ích text nhỏ (stdlib, P14). Phát hiện tiếng Trung để tự dịch (ADR-009),
+nhận diện URL video để trích transcript (ADR-011)."""
 
 from __future__ import annotations
+
+import re
+
+_VIDEO_PAT = re.compile(
+    r"(youtube\.com/(watch|shorts)|youtu\.be/|bilibili\.com/video|"
+    r"tiktok\.com/.+/video|douyin\.com/video|kuaishou\.com/short-video)",
+    re.I,
+)
+
+
+def is_video_url(url: str | None) -> bool:
+    """True nếu URL là trang video (nội dung thật nằm TRONG video, không phải HTML)."""
+    return bool(url and _VIDEO_PAT.search(url))
 
 
 def cjk_ratio(text: str) -> float:

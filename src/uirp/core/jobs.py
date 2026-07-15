@@ -157,16 +157,20 @@ def _execute(conn: sqlite3.Connection, cfg: Config, job: Job) -> None:
         _set_state(conn, job.id, state="FAILED", error=repr(e), error_kind=error_kind(e))
 
 
-def run(conn: sqlite3.Connection, cfg: Config, once: bool = False) -> int:
+def run(conn: sqlite3.Connection, cfg: Config, once: bool = False,
+        max_jobs: int | None = None) -> int:
     """Chạy scheduler tới khi hết việc.
 
     once=True: xử lý hết job sẵn sàng rồi trả về (không ngủ chờ quota).
     once=False: ngủ tới retry_at gần nhất rồi chạy tiếp (ARC-015).
+    max_jobs: dừng sau N job — cho web xử lý theo lô, request ngắn (ADR-011).
     Trả số job đã xử lý (DONE/FAILED/WAITING_QUOTA) trong lần gọi này.
     """
     processed = 0
     _reclaim_stuck(conn, cfg)
     while True:
+        if max_jobs is not None and processed >= max_jobs:
+            return processed
         _wake_due_quota(conn)
         job = _claim_next(conn)
         if job is not None:

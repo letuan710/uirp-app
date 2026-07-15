@@ -17,7 +17,7 @@ from uirp.config import Config
 from uirp.errors import SourceFileError
 from uirp.ids import new_id
 from uirp.store import db
-from uirp.textutil import is_chinese
+from uirp.textutil import is_chinese, is_video_url
 
 
 def route_obs(content: str, obs_id: str) -> tuple[str, dict]:
@@ -164,6 +164,9 @@ def make_handler(client: AIClient):
                 children.append(route_obs(c["text"], oid))
             for img in ext.images:
                 _add_obs(conn, ev["id"], "image_ref", img.get("alt") or "(ảnh)", img)
+        if is_video_url(io["source_url"]):
+            # Trang video: nội dung thật nằm TRONG video → trích phụ đề (ADR-011).
+            children.append(("transcribe", {"evidence_id": ev["id"], "url": io["source_url"]}))
         return children
 
     return parse

@@ -51,34 +51,37 @@ INDEX_HTML = """<!doctype html>
 </style></head><body>
 <header><h1>🔎 UIRP</h1><span class="stat" id="stat">…</span></header>
 <main>
- <div class="card"><h2>1 · Chủ đề nghiên cứu</h2>
+ <div class="card"><h2>1 · Tìm kiếm nghiên cứu</h2>
+  <label>Chủ đề / từ khóa</label>
+  <input id="q" placeholder="ví dụ: lừa đảo đầu tư Mr Pips">
   <div class="row">
-   <div><label>Chọn chủ đề</label><select id="topic"></select></div>
-   <div><label>Hoặc tạo mới</label><input id="newtopic" placeholder="Tên chủ đề mới"></div>
+   <button id="btn_search" onclick="search()">🔍 Tìm trên tất cả nền tảng</button>
+   <button id="btn_stop" class="sec" onclick="stopSearch()" style="display:none">⏹ Dừng</button>
   </div>
-  <button class="sec" onclick="mkTopic()">Tạo chủ đề</button>
+  <p class="stat">Tự tìm lần lượt trên các nền hỗ trợ tìm tự động (Facebook, YouTube, TikTok, X, Weibo…) —
+   mỗi nền báo kết quả ngay khi xong, không cần chờ hết mới thấy gì.
+   Nền chống bot mạnh (Xiaohongshu, Douyin, Kuaishou, Zalo) cần nạp file lưu tay — xem mục Nâng cao.</p>
+  <div id="curtopic" class="stat"></div>
+  <div id="searchprog" class="stat"></div>
+  <div id="searchout"></div>
+  <details>
+   <summary>Nâng cao</summary>
+   <label>Mở lại chủ đề đã có</label>
+   <select id="topic" onchange="pickTopic()"></select>
+   <label>Nạp file lưu tay cho 1 nền tảng cụ thể</label>
+   <div class="row"><select id="pf_ingest"></select><button class="sec" onclick="ingest()">Nạp</button></div>
+   <p class="stat">Thả file (.html/.png…) đã lưu vào <code>data/inbox/&lt;nền tảng&gt;/</code> trước khi bấm Nạp.</p>
+  </details>
  </div>
 
- <div class="card"><h2>2 · Nạp dữ liệu lưu tay (Mode A — mọi nền tảng)</h2>
-  <label>Nền tảng</label><select id="pf_ingest"></select>
-  <p class="stat">Thả file (.html/.png…) đã lưu vào <code>data/inbox/&lt;nền tảng&gt;/</code> rồi bấm Nạp.</p>
-  <button onclick="ingest()">Nạp vào chủ đề</button>
- </div>
-
- <div class="card"><h2>3 · Tự động tìm (Mode B — cần trình duyệt)</h2>
-  <label>Từ khóa</label><input id="kw" placeholder="ví dụ: lừa đảo đầu tư">
-  <label>Nền tảng (trống = mọi nền hỗ trợ tìm)</label><input id="pf_disc" placeholder="facebook,weibo,tiktok">
-  <button onclick="discover()">Tự động tìm & thu</button>
- </div>
-
- <div class="card"><h2>4 · Xử lý & báo cáo</h2>
+ <div class="card"><h2>2 · Xử lý & báo cáo</h2>
   <div class="row"><button onclick="run()">▶ Chạy xử lý (parse→dịch→trích xuất)</button>
    <button class="sec" onclick="report()">📄 Xem báo cáo</button></div>
   <div id="msg"></div>
   <pre id="out"></pre>
  </div>
 
- <div class="card"><h2>5 · Curator — thực thể (gộp/tách)</h2>
+ <div class="card"><h2>3 · Curator — thực thể (gộp/tách)</h2>
   <div id="entlist"></div>
   <div class="row">
    <div><label>Giữ (keep id)</label><input id="mg_keep" placeholder="ent_…"></div>
@@ -88,7 +91,7 @@ INDEX_HTML = """<!doctype html>
   <button class="sec" onclick="loadEntities()">↻ Tải lại danh sách</button>
  </div>
 
- <div class="card"><h2>6 · Curator — đề xuất gộp (review queue)</h2>
+ <div class="card"><h2>4 · Curator — đề xuất gộp (review queue)</h2>
   <div class="row">
    <div><label>Ngưỡng độ giống (scan)</label><input id="rv_th" value="0.72"></div>
    <div><label>Confidence tối thiểu (duyệt hàng loạt)</label><input id="rv_min" value="0.85"></div>
@@ -98,7 +101,7 @@ INDEX_HTML = """<!doctype html>
   <div id="rvqueue"></div>
  </div>
 
- <div class="card"><h2>7 · Curator — ghi chú (annotation)</h2>
+ <div class="card"><h2>5 · Curator — ghi chú (annotation)</h2>
   <div class="row">
    <div><label>Target id (claim/entity/evidence…)</label><input id="an_target" placeholder="clm_… / ent_…"></div>
    <div><label>Verdict (tuỳ chọn)</label><input id="an_verdict" placeholder="ví dụ: xác nhận, nghi vấn"></div>
@@ -107,7 +110,7 @@ INDEX_HTML = """<!doctype html>
   <button onclick="annotate()">Ghi chú</button>
  </div>
 
- <div class="card"><h2>8 · Chi phí gọi AI (usage_log)</h2>
+ <div class="card"><h2>6 · Chi phí gọi AI (usage_log)</h2>
   <button class="sec" onclick="loadCost()">↻ Tải chi phí</button>
   <div id="costtbl"></div>
  </div>
@@ -116,13 +119,16 @@ INDEX_HTML = """<!doctype html>
 </main>
 <script>
 const $=s=>document.querySelector(s);
+let CUR=null, CUR_NAME="";
 async function api(path,opt){const r=await fetch(path,opt);return r.json()}
 function msg(t){$("#msg").textContent=t}
+function showCur(){$("#curtopic").textContent=CUR?`Đang làm việc trên chủ đề: ${CUR_NAME}`:"(chưa chọn chủ đề nào — gõ từ khóa rồi Tìm)"}
 async function refresh(){
  const s=await api("/api/status");
  $("#stat").textContent=`evidence ${s.counts.evidence} · claim ${s.counts.claim} · entity ${s.counts.entity} · job `+Object.entries(s.jobs||{}).map(([k,v])=>`${k}:${v}`).join(" ");
  const ts=await api("/api/topics");const sel=$("#topic");sel.innerHTML="";
- ts.forEach(t=>{const o=document.createElement("option");o.value=t.id;o.textContent=`${t.name} (${t.n} nguồn)`;sel.appendChild(o)});
+ const ph=document.createElement("option");ph.value="";ph.textContent="— chọn —";sel.appendChild(ph);
+ ts.forEach(t=>{const o=document.createElement("option");o.value=t.id;o.textContent=`${t.name} (${t.n} nguồn)`;if(t.id===CUR)o.selected=true;sel.appendChild(o)});
 }
 async function loadPlatforms(){
  const ps=await api("/api/platforms");
@@ -134,11 +140,56 @@ async function loadPlatforms(){
   c.innerHTML=`${p.display}<br><span class="${p.auto?'a':'m'}">${p.auto?'Mode A + B':'Mode A (lưu tay)'}</span>`;box.appendChild(c);
  });
 }
-async function mkTopic(){const n=$("#newtopic").value.trim();if(!n)return;await api("/api/topic",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n})});$("#newtopic").value="";await refresh();msg("Đã tạo chủ đề.")}
-async function ingest(){const r=await api("/api/ingest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:$("#topic").value,platform:$("#pf_ingest").value})});msg(r.error?("Lỗi: "+r.error):`Đã nạp ${r.ingested} file. Bấm 'Chạy xử lý'.`);await refresh()}
-async function run(){msg("Đang xử lý…");const r=await api("/api/run",{method:"POST"});msg(r.error?("Lỗi: "+r.error):`Đã xử lý ${r.processed} job.`);await refresh()}
-async function discover(){msg("Đang tìm (cần trình duyệt)…");const pf=$("#pf_disc").value.trim();const body={topic:$("#topic").value,keyword:$("#kw").value,platforms:pf?pf.split(",").map(s=>s.trim()):null};const r=await api("/api/discover",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});msg(r.error?("Lỗi: "+r.error):("Kết quả: "+JSON.stringify(r.results)));await refresh()}
-async function report(){const r=await api("/api/report?topic="+encodeURIComponent($("#topic").value));$("#out").textContent=r.error?("Lỗi: "+r.error):r.markdown;msg("")}
+function pickTopic(){const sel=$("#topic");if(!sel.value)return;CUR=sel.value;CUR_NAME=sel.options[sel.selectedIndex].textContent.replace(/\\s*\\(\\d+ nguồn\\)$/,"");showCur()}
+let STOP_SEARCH=false, ABORT=null;
+function addResultLine(text){const d=document.createElement("div");d.className="item";d.textContent=text;$("#searchout").appendChild(d)}
+async function search(){
+ const q=$("#q").value.trim();if(!q){msg("Gõ từ khóa/chủ đề trước đã.");return}
+ msg("Đang tạo/mở chủ đề…");
+ const t=await api("/api/topic",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:q})});
+ if(t.error){msg("Lỗi: "+t.error);return}
+ CUR=t.id;CUR_NAME=q;showCur();
+ const plats=await api("/api/discover_platforms");
+ STOP_SEARCH=false;
+ $("#btn_search").disabled=true;$("#btn_stop").style.display="";
+ $("#searchout").innerHTML="";
+ if(!plats.length){$("#searchprog").textContent="(không có nền tảng nào hỗ trợ tìm tự động)";$("#btn_search").disabled=false;$("#btn_stop").style.display="none";return}
+ let found=0;
+ for(let i=0;i<plats.length;i++){
+  if(STOP_SEARCH){$("#searchprog").textContent=`Đã dừng ở nền ${i}/${plats.length}.`;break}
+  const p=plats[i];
+  $("#searchprog").textContent=`Đang tìm: ${p.display} … (${i+1}/${plats.length})`;
+  let r;
+  ABORT=new AbortController();
+  try{
+   const resp=await fetch("/api/discover_one",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:CUR,keyword:q,platform:p.key}),signal:ABORT.signal});
+   r=await resp.json();
+  }catch(e){
+   if(e.name==="AbortError"){$("#searchprog").textContent=`Đã dừng ở nền ${i+1}/${plats.length}.`;break}
+   r={error:String(e)};
+  }
+  if(r.error)addResultLine(`${p.display}: bỏ qua — ${r.error}`);
+  else{addResultLine(`${p.display}: ${r.n} kết quả`);found+=r.n||0}
+  if(i===plats.length-1)$("#searchprog").textContent=`Xong — quét ${plats.length} nền, tìm được ${found} kết quả.`;
+ }
+ $("#btn_search").disabled=false;$("#btn_stop").style.display="none";
+ msg("Xong. Giờ bấm 'Chạy xử lý' ở mục 2.");await refresh();
+}
+function stopSearch(){STOP_SEARCH=true;if(ABORT)ABORT.abort()}
+async function ingest(){if(!CUR){msg("Chưa có chủ đề — tìm kiếm trước hoặc mở chủ đề cũ ở mục Nâng cao.");return}const r=await api("/api/ingest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:CUR,platform:$("#pf_ingest").value})});msg(r.error?("Lỗi: "+r.error):`Đã nạp ${r.ingested} file. Bấm 'Chạy xử lý'.`);await refresh()}
+async function run(){
+ if(!CUR){msg("Chưa có chủ đề — tìm kiếm trước.");return}
+ let total=0;
+ while(true){
+  msg(`Đang xử lý… (đã xong ${total} job)`);
+  const r=await api("/api/run",{method:"POST"});
+  if(r.error){msg("Lỗi: "+r.error);break}
+  total+=r.processed;
+  if(!r.pending||r.processed===0){msg(`Xong — đã xử lý ${total} job.`);break}
+ }
+ await refresh();
+}
+async function report(){if(!CUR){msg("Chưa có chủ đề — tìm kiếm trước.");return}const r=await api("/api/report?topic="+encodeURIComponent(CUR));$("#out").textContent=r.error?("Lỗi: "+r.error):r.markdown;msg("")}
 
 async function loadEntities(){
  const es=await api("/api/entities");const box=$("#entlist");box.innerHTML="";
@@ -179,7 +230,7 @@ async function loadCost(){
  box.innerHTML=h+'</table>';
 }
 
-loadPlatforms();refresh();loadEntities();loadReview();loadCost();
+showCur();loadPlatforms();refresh();loadEntities();loadReview();loadCost();
 </script></body></html>"""
 
 
@@ -194,6 +245,30 @@ def _send(h: BaseHTTPRequestHandler, obj, code: int = 200, ctype: str = "applica
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _short_err(e: Exception) -> str:
+    """Rút gọn lỗi Playwright (có thể dài cả trang, chứa nguyên dòng lệnh Chrome) còn 1 dòng."""
+    first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+    return first[:200]
+
+
+_LOG_FILE = None  # đặt trong serve() → data/logs/web-YYYYMMDD.log
+
+
+def _log(msg: str) -> None:
+    """In log ra terminal + ghi file data/logs/ để tra cứu về sau (ADR-011)."""
+    line = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        print(line.encode("ascii", "replace").decode("ascii"))
+    if _LOG_FILE:
+        try:
+            with open(_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass  # log file lỗi không được chặn nghiệp vụ
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -214,6 +289,10 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/platforms":
             _send(self, [{"key": p.key, "display": p.display, "region": p.region,
                           "auto": p.auto, "note": p.note} for p in platforms.all_platforms()])
+            return
+        if path == "/api/discover_platforms":
+            _send(self, [{"key": p.key, "display": p.display}
+                         for p in platforms.all_platforms() if p.auto and p.search_url])
             return
         conn = db.connect(self.cfg)
         try:
@@ -257,27 +336,60 @@ class _Handler(BaseHTTPRequestHandler):
         conn = db.connect(self.cfg)
         try:
             if path == "/api/topic":
-                tid = new_id("top")
-                db.insert(conn, "topic", {"id": tid, "name": data["name"],
-                          "description": data.get("desc"), "status": "active", "created_at": _now()})
-                _send(self, {"id": tid})
+                name = (data.get("name") or "").strip()
+                if not name:
+                    _send(self, {"error": "thiếu tên chủ đề"}, 400)
+                else:
+                    hit = db.query(conn,
+                        "SELECT id FROM topic WHERE LOWER(name)=LOWER(?) ORDER BY created_at DESC LIMIT 1",
+                        (name,))
+                    if hit:
+                        _log(f"chủ đề: mở lại «{name}» ({hit[0]['id']})")
+                        _send(self, {"id": hit[0]["id"], "created": False})
+                    else:
+                        tid = new_id("top")
+                        db.insert(conn, "topic", {"id": tid, "name": name,
+                                  "description": data.get("desc"), "status": "active",
+                                  "created_at": _now()})
+                        _log(f"chủ đề: tạo mới «{name}» ({tid})")
+                        _send(self, {"id": tid, "created": True})
             elif path == "/api/ingest":
                 n = manual.ingest(conn, self.cfg, data["topic"], data.get("platform", "facebook"))
+                _log(f"ingest {data.get('platform', 'facebook')}: nạp {n} file")
                 _send(self, {"ingested": n})
             elif path == "/api/run":
                 register_all(self.cfg)
-                _send(self, {"processed": jobs.run(conn, self.cfg, once=True)})
+                _log("run: xử lý lô job (tối đa 25/lượt)…")
+                n = jobs.run(conn, self.cfg, once=True, max_jobs=25)
+                left = db.query(conn,
+                    "SELECT COUNT(*) n FROM job WHERE state='PENDING'")[0]["n"]
+                _log(f"run: xong lô {n} job, còn chờ {left}")
+                _send(self, {"processed": n, "pending": left})
             elif path == "/api/discover":
                 keys = data.get("platforms") or [
                     p.key for p in platforms.all_platforms() if p.auto and p.search_url]
                 results = {}
                 for k in keys:
+                    _log(f"discover {k}: đang tìm «{data['keyword']}»…")
                     try:
                         results[k] = browser.collect(conn, self.cfg, data["topic"], k,
                                                      "keyword", data["keyword"])
+                        _log(f"discover {k}: {results[k]} kết quả")
                     except Exception as e:  # noqa: BLE001
-                        results[k] = f"bỏ qua: {e}"
+                        results[k] = f"bỏ qua: {_short_err(e)}"
+                        _log(f"discover {k}: lỗi — {_short_err(e)}")
                 _send(self, {"results": results})
+            elif path == "/api/discover_one":
+                pf = data["platform"]
+                _log(f"discover {pf}: đang tìm «{data['keyword']}»…")
+                try:
+                    n = browser.collect(conn, self.cfg, data["topic"], pf,
+                                        "keyword", data["keyword"])
+                    _log(f"discover {pf}: {n} kết quả")
+                    _send(self, {"n": n})
+                except Exception as e:  # noqa: BLE001
+                    _log(f"discover {pf}: lỗi — {_short_err(e)}")
+                    _send(self, {"n": None, "error": _short_err(e)})
             elif path == "/api/entity/merge":
                 curate.merge_entity(conn, data["keep"], data["drop"])
                 _send(self, {"ok": True})
@@ -302,9 +414,14 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def serve(cfg: Config, port: int = 8787) -> None:
+    global _LOG_FILE
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    _LOG_FILE = cfg.logs_dir / f"web-{datetime.now():%Y%m%d}.log"
     _Handler.cfg = cfg
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     print(f"UIRP web đang chạy: http://127.0.0.1:{port}  (Ctrl+C để dừng)")
+    print(f"Log ghi tại: {_LOG_FILE}")
+    _log(f"--- khởi động web, backend={cfg.backend} ---")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

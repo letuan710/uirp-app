@@ -5,7 +5,7 @@ from __future__ import annotations
 from uirp.ai.adapter import AIClient
 from uirp.config import Config
 from uirp.core import jobs
-from uirp.pipeline import extract, parse, read_image, translate
+from uirp.pipeline import extract, parse, read_image, transcribe, translate
 
 
 def register_all(cfg: Config) -> None:
@@ -15,3 +15,4 @@ def register_all(cfg: Config) -> None:
     jobs.register("extract", extract.make_handler(client))
     jobs.register("read_image", read_image.make_handler(client))
     jobs.register("translate", translate.make_handler(client))
+    jobs.register("transcribe", transcribe.make_handler())  # không cần AI (yt-dlp)

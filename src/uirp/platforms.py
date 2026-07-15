@@ -27,6 +27,10 @@ class Platform:
 
 
 _P: list[Platform] = [
+    # --- Web nói chung (báo chí, blog, mọi trang) qua máy tìm kiếm — ADR-011 ---
+    Platform("google", "Google (web/báo chí)", "global", "https://www.google.com", True,
+             "https://www.google.com/search?q={q}", None, None, ("http",),
+             note="Thu trang ĐÍCH trong kết quả tìm (mọi nguồn web); link nội bộ Google bị loại."),
     # --- VN / global ---
     Platform("facebook", "Facebook", "global", "https://www.facebook.com", True,
              "https://www.facebook.com/search/posts/?q={q}",
