@@ -47,6 +47,16 @@ class AIBackend(Protocol):
     def complete(self, model: str, system: str, user: str, req: AIRequest) -> AIResponse: ...
 
 
+def _unfence_json(text: str) -> str:
+    """Gỡ khối ```json ... ``` nếu model bọc JSON trong markdown (áp cho mọi backend)."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[-1] if "\n" in t else t
+        if t.endswith("```"):
+            t = t[: t.rfind("```")]
+    return t.strip()
+
+
 def _load_prompt(name: str) -> tuple[str, str]:
     """Trả (version, body) từ prompts/<name>.md (STD-003)."""
     text = (_PROMPTS / f"{name}.md").read_text(encoding="utf-8")
@@ -73,7 +83,12 @@ class AIClient:
         model = self.cfg.model_for_tier(req.tier)
         version, body = _load_prompt(req.prompt_ref)
         user = string.Template(body).safe_substitute(req.payload)
-        resp = self.backend.complete(model, _SYSTEM, user, req)
+        system = _SYSTEM
+        if req.expect_json:
+            system += " Trả về DUY NHẤT một khối JSON hợp lệ, không markdown hay giải thích."
+        resp = self.backend.complete(model, system, user, req)
+        if req.expect_json:
+            resp.text = _unfence_json(resp.text)
         if conn is not None:
             db.insert(conn, "usage_log", {
                 "id": new_id("usg"), "job_id": job_id, "backend": self.backend_name,

@@ -26,6 +26,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "mode": "cdp", "cdp_port": 9222, "headless": False,
         "max_posts_per_run": 20, "collect_comments": True,
         "max_comments_per_post": 50, "scroll_depth": 5,
+        "download_images": True, "max_images_per_post": 10,
         "min_delay_seconds": 20, "max_delay_seconds": 60,
     },
 }

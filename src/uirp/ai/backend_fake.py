@@ -22,6 +22,10 @@ class FakeBackend:
             out = json.dumps({"relevant": True})
         elif req.prompt_ref == "extract_claims":
             out = self._extract(text_in)
+        elif req.prompt_ref == "read_image":
+            out = ""  # FakeBackend không đọc được ảnh — backend Claude thật mới OCR được
+        elif req.prompt_ref == "translate":
+            out = f"[VI-giả] {text_in}"  # FakeBackend không dịch thật — chỉ đánh dấu để demo flow
         else:
             out = "{}"
         return AIResponse(

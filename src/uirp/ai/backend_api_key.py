@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
 import time
+from typing import Any
 
 from uirp.ai.adapter import AIRequest, AIResponse
 from uirp.config import Config
@@ -38,13 +41,24 @@ class ApiKeyBackend:
             raise ConfigError("chưa cài anthropic (pip install anthropic)") from e
 
         client = anthropic.Anthropic()  # đọc ANTHROPIC_API_KEY từ env
+        content: Any = user
+        if req.images:  # vision: đính ảnh dạng base64 (đọc ảnh — ARC-009b)
+            content = []
+            for p in req.images:
+                mt = mimetypes.guess_type(str(p))[0] or "image/png"
+                b64 = base64.standard_b64encode(p.read_bytes()).decode()
+                content.append({"type": "image",
+                                "source": {"type": "base64", "media_type": mt, "data": b64}})
+            content.append({"type": "text", "text": user})
         try:
             resp = client.messages.create(
                 model=model,
                 max_tokens=4096,
-                system=system,
-                messages=[{"role": "user", "content": user}],
+                system=system,  # adapter đã thêm chỉ dẫn JSON khi cần
+                messages=[{"role": "user", "content": content}],
             )
+        except anthropic.AuthenticationError as e:
+            raise ConfigError("ANTHROPIC_API_KEY sai/thiếu") from e
         except anthropic.RateLimitError as e:
             retry_after = None
             if getattr(e, "response", None) is not None:

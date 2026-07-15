@@ -17,6 +17,12 @@ from uirp.config import Config
 from uirp.errors import SourceFileError
 from uirp.ids import new_id
 from uirp.store import db
+from uirp.textutil import is_chinese
+
+
+def route_obs(content: str, obs_id: str) -> tuple[str, dict]:
+    """Nội dung tiếng Trung → dịch trước; còn lại → trích xuất thẳng (ADR-009)."""
+    return ("translate" if is_chinese(content) else "extract", {"obs_id": obs_id})
 
 _SKIP = ("script", "style", "title", "head", "noscript")
 
@@ -138,10 +144,8 @@ def make_handler(client: AIClient):
         media = ev["media_type"]
         children: list = []
         if media.startswith("image"):
-            # Ảnh (screenshot) → observation image_ref; OCR/vision ở bước read_image.
-            _add_obs(conn, ev["id"], "image_ref", io["title"] or "(ảnh)",
-                     {"src": ev["file_path"], "alt": io["title"]})
-            return children
+            # Ảnh (screenshot / ảnh tải về) → bước read_image OCR (ADR-008, ARC-009b).
+            return [("read_image", {"io_id": payload["io_id"]})]
 
         if media.startswith("text") or media == "multipart/related":
             html = _decode_html(raw)
@@ -154,10 +158,10 @@ def make_handler(client: AIClient):
             if body:
                 loc = {"author": ext.post_author} if ext.post_author else None
                 oid = _add_obs(conn, ev["id"], "body_text", body, loc)
-                children.append(("extract", {"obs_id": oid}))
+                children.append(route_obs(body, oid))
             for c in ext.comments:
                 oid = _add_obs(conn, ev["id"], "comment", c["text"], {"author": c["author"]})
-                children.append(("extract", {"obs_id": oid}))
+                children.append(route_obs(c["text"], oid))
             for img in ext.images:
                 _add_obs(conn, ev["id"], "image_ref", img.get("alt") or "(ảnh)", img)
         return children

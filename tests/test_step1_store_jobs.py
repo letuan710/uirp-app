@@ -43,9 +43,9 @@ def test_id_rejects_bad_prefix():
 
 
 # --- schema/migration (ONT-R8, STD4-R10) ---
-def test_schema_version_is_1(conn):
+def test_schema_versioned(conn):
     v = db.query(conn, "SELECT value FROM _meta WHERE key='schema_version'")
-    assert v[0]["value"] == "1"
+    assert int(v[0]["value"]) >= 1  # đã tạo + versioned (v1 gốc, v2 sau migration FTS)
 
 
 def test_all_11_ontology_tables_exist(conn):

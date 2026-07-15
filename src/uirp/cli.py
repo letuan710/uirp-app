@@ -11,8 +11,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from uirp import __version__, config, curate
-from uirp.connectors import facebook_browser, facebook_manual
+from uirp import __version__, config, curate, platforms
+from uirp.connectors import browser, manual
 from uirp.errors import ConfigError, PermanentError
 from uirp.core import demo, jobs
 from uirp.ids import new_id
@@ -31,14 +31,10 @@ def _setup_logging(cfg: config.Config) -> None:
 
 
 def _dirs(cfg: config.Config) -> list[Path]:
-    return [
-        cfg.data_dir,
-        cfg.db_path.parent,
-        cfg.evidence_dir,
-        cfg.inbox_dir / "facebook",
-        cfg.logs_dir,
-        cfg.reports_dir,
-    ]
+    base = [cfg.data_dir, cfg.db_path.parent, cfg.evidence_dir, cfg.logs_dir, cfg.reports_dir]
+    # Thư mục inbox cho MỌI nền tảng đã khai báo (ADR-009).
+    base += [cfg.inbox_dir / p.key for p in platforms.all_platforms()]
+    return base
 
 
 def cmd_init(cfg: config.Config, args: argparse.Namespace) -> int:
@@ -60,12 +56,82 @@ def cmd_init(cfg: config.Config, args: argparse.Namespace) -> int:
 
 
 def cmd_run(cfg: config.Config, args: argparse.Namespace) -> int:
+    if args.backend:  # ghi đè backend cho lần chạy này (dễ so sánh fake vs Claude thật)
+        cfg.data["api"]["backend"] = args.backend
+    print(f"Backend AI: {cfg.backend}")
     demo.register_all()          # handler demo (kiểm chứng state machine)
-    pipeline_register(cfg)       # handler thật: parse, extract (bước 4-5)
+    pipeline_register(cfg)       # handler thật: parse, extract, translate, read_image
     conn = db.connect(cfg)
+    if args.loop:  # chạy liên tục (Continuous Research, ADR-010)
+        import time
+        print(f"Chạy liên tục (nghỉ {args.interval}s mỗi vòng) — Ctrl+C để dừng.")
+        try:
+            while True:
+                n = jobs.run(conn, cfg, once=True)
+                if n:
+                    print(f"  đã xử lý {n} job")
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print("\nĐã dừng.")
+        conn.close()
+        return 0
     n = jobs.run(conn, cfg, once=args.once)
     print(f"Đã xử lý {n} job trong lần chạy này.")
     conn.close()
+    return 0
+
+
+def cmd_web(cfg: config.Config, args: argparse.Namespace) -> int:
+    from uirp import web
+    if not args.no_open:
+        import threading
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{args.port}")).start()
+    web.serve(cfg, args.port)
+    return 0
+
+
+def cmd_check(cfg: config.Config, args: argparse.Namespace) -> int:
+    import importlib.util
+
+    def ok(b: bool) -> str:
+        return "✔" if b else "✘"
+
+    print("=== Kiểm tra sẵn sàng UIRP ===")
+    print(f"  [{ok(sys.version_info >= (3, 12))}] Python "
+          f"{sys.version_info.major}.{sys.version_info.minor} (cần ≥ 3.12)")
+    conn = db.connect(cfg)
+    v = db.query(conn, "SELECT value FROM _meta WHERE key='schema_version'")[0]["value"]
+    print(f"  [✔] DB khởi tạo (schema v{v})  →  {cfg.db_path}")
+
+    be = cfg.backend
+    print(f"  Backend AI: {be}")
+    has_anth = importlib.util.find_spec("anthropic") is not None
+    has_agent = importlib.util.find_spec("claude_agent_sdk") is not None
+    print(f"      [{ok(has_anth)}] package anthropic (cho backend api_key)")
+    print(f"      [{ok(has_agent)}] package claude_agent_sdk (cho backend thuê bao)")
+    if be == "api_key":
+        print(f"      [{ok(bool(cfg.api_key()))}] ANTHROPIC_API_KEY (biến môi trường)")
+
+    has_pw = importlib.util.find_spec("playwright") is not None
+    print(f"  [{ok(has_pw)}] Playwright (Mode B tự động — không cần nếu chỉ dùng Mode A)")
+    nt = db.query(conn, "SELECT COUNT(*) n FROM topic")[0]["n"]
+    print(f"  [{ok(nt > 0)}] có {nt} chủ đề; {len(platforms.all_platforms())} nền tảng khai báo")
+    conn.close()
+
+    print("\n=== Kết luận: đã đủ chạy chưa? ===")
+    if be == "fake":
+        print("  ✔ ĐỦ chạy DEMO offline ngay (Mode A lưu tay + xử lý bằng FakeBackend).")
+        print("  → Để chạy THẬT (bóc tách/dịch bằng Claude), đổi config.toml:")
+        print("      backend=\"claude_agent_sdk\"  (cài claude-agent-sdk + đăng nhập Claude Code), hoặc")
+        print("      backend=\"api_key\"           (cài anthropic + đặt ANTHROPIC_API_KEY).")
+    else:
+        ready = (be == "api_key" and has_anth and cfg.api_key()) or (
+            be == "claude_agent_sdk" and has_agent)
+        print(f"  [{ok(bool(ready))}] Backend {be}: "
+              + ("SẴN SÀNG chạy thật." if ready else "còn THIẾU điều kiện ở trên."))
+    print("  Mode B (tự động tìm): "
+          + ("cần Chrome đăng nhập + config [fetch] mode=cdp." if has_pw else "cần cài Playwright."))
     return 0
 
 
@@ -104,9 +170,27 @@ def cmd_ingest(cfg: config.Config, args: argparse.Namespace) -> int:
         print(f"Không có topic {args.topic}. Xem: uirp topic list", file=sys.stderr)
         conn.close()
         return 1
-    n = facebook_manual.ingest(conn, cfg, args.topic)
-    print(f"Đã nuốt {n} file từ inbox → evidence + job parse. Chạy: uirp run --once")
+    try:
+        n = manual.ingest(conn, cfg, args.topic, args.platform)
+    except ConfigError as e:
+        print(f"Lỗi: {e}", file=sys.stderr)
+        conn.close()
+        return 1
+    print(f"Đã nuốt {n} file từ inbox/{args.platform} → evidence + job parse. Chạy: uirp run --once")
     conn.close()
+    return 0
+
+
+def cmd_platforms(cfg: config.Config, args: argparse.Namespace) -> int:
+    print("Nền tảng đã khai báo (ingest --platform <key> dùng được cho TẤT CẢ; "
+          "fetch tự động chỉ khi cột Auto=✔):")
+    print(f"  {'key':<13}{'khu vực':<8}{'Auto':<6}nền tảng")
+    for p in platforms.all_platforms():
+        auto = "co" if p.auto else "ModeA"
+        note = f"  — {p.note}" if p.note else ""
+        print(f"  {p.key:<13}{p.region:<8}{auto:<6}{p.display}{note}")
+    print("\n(Auto=co: Mode B tự động khả thi, cần tinh chỉnh selector khi chạy thật. "
+          "ModeA: anti-bot mạnh/đóng → dùng Mode A lưu tay.)")
     return 0
 
 
@@ -116,14 +200,39 @@ def cmd_fetch(cfg: config.Config, args: argparse.Namespace) -> int:
         print(f"Không có topic {args.topic}. Xem: uirp topic list", file=sys.stderr)
         conn.close()
         return 1
-    print(f"⚠️ Mode B: chỉ dùng nguồn công khai, tài khoản phụ; gặp checkpoint sẽ dừng (ADR-002).")
+    print(f"⚠️ Mode B ({args.platform}): chỉ nguồn công khai, tài khoản phụ; gặp checkpoint sẽ dừng (ADR-002).")
     try:
-        n = facebook_browser.collect(conn, cfg, args.topic, args.mode, args.value)
+        n = browser.collect(conn, cfg, args.topic, args.platform, args.mode, args.value)
     except (ConfigError, PermanentError) as e:
         print(f"Fetch dừng: {e}", file=sys.stderr)
         conn.close()
         return 1
     print(f"Đã thu {n} bài (mỗi bài: HTML + screenshot). Chạy: uirp run --once")
+    conn.close()
+    return 0
+
+
+def cmd_discover(cfg: config.Config, args: argparse.Namespace) -> int:
+    conn = db.connect(cfg)
+    if not db.get(conn, "topic", args.topic):
+        print(f"Không có topic {args.topic}. Xem: uirp topic list", file=sys.stderr)
+        conn.close()
+        return 1
+    if args.platforms:
+        keys = [k.strip() for k in args.platforms.split(",") if k.strip()]
+    else:  # mặc định: mọi nền hỗ trợ tìm tự động (auto + có search_url)
+        keys = [p.key for p in platforms.all_platforms() if p.auto and p.search_url]
+    print(f"⚠️ Tự động tìm «{args.keyword}» trên {len(keys)} nền tảng — chỉ nguồn công khai, "
+          f"tài khoản phụ, dừng khi checkpoint (ADR-002/009).")
+    total = 0
+    for k in keys:
+        try:
+            n = browser.collect(conn, cfg, args.topic, k, "keyword", args.keyword)
+            print(f"  {k}: {n} bài")
+            total += n
+        except (ConfigError, PermanentError) as e:
+            print(f"  {k}: bỏ qua — {e}")
+    print(f"Tổng {total} bài. Chạy: uirp run --once (nội dung tiếng Trung sẽ tự dịch).")
     conn.close()
     return 0
 
@@ -372,6 +481,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser("run", help="Chạy scheduler xử lý hàng đợi job")
     pr.add_argument("--once", action="store_true", help="Xử lý hết việc sẵn sàng rồi thoát (không chờ quota)")
+    pr.add_argument("--backend", choices=["fake", "claude_agent_sdk", "api_key"], default=None,
+                    help="Ghi đè backend AI cho lần chạy này (so sánh fake vs Claude thật)")
+    pr.add_argument("--loop", action="store_true", help="Chạy liên tục (nghiên cứu qua đêm), Ctrl+C dừng")
+    pr.add_argument("--interval", type=int, default=60, help="Giây nghỉ giữa các vòng khi --loop")
+
+    sub.add_parser("check", help="Kiểm tra sẵn sàng: đã đủ chạy chưa, còn thiếu gì (ADR-010)")
+    pw = sub.add_parser("web", help="Mở giao diện web nhập liệu (local, ADR-010)")
+    pw.add_argument("--port", type=int, default=8787)
+    pw.add_argument("--no-open", action="store_true", help="Không tự mở trình duyệt")
 
     pj = sub.add_parser("jobs", help="Xem job (không --state: đếm theo trạng thái)")
     pj.add_argument("--state", help="Lọc theo trạng thái: PENDING|RUNNING|DONE|FAILED|WAITING_QUOTA")
@@ -387,8 +505,11 @@ def build_parser() -> argparse.ArgumentParser:
     pta.add_argument("--desc", default=None)
     tsub.add_parser("list", help="Liệt kê topic")
 
-    pi = sub.add_parser("ingest", help="Mode A: nuốt file trong inbox/facebook (ADR-002)")
+    pi = sub.add_parser("ingest", help="Mode A: nuốt file trong inbox/<platform> (đa nền tảng, ADR-009)")
     pi.add_argument("--topic", required=True)
+    pi.add_argument("--platform", default="facebook", help="key nền tảng (xem: uirp platforms)")
+
+    sub.add_parser("platforms", help="Liệt kê nền tảng đã khai báo (VN + Trung Quốc)")
 
     prp = sub.add_parser("report", help="Sinh báo cáo Markdown cho một topic")
     prp.add_argument("--topic", required=True)
@@ -429,10 +550,17 @@ def build_parser() -> argparse.ArgumentParser:
     pee = sub.add_parser("erase-entity", help="Tombstone evidence liên quan một entity (CHR-033)")
     pee.add_argument("ent_id")
 
-    pf = sub.add_parser("fetch", help="Mode B: thu tự động qua trình duyệt (ADR-002/007/008)")
+    pf = sub.add_parser("fetch", help="Mode B: thu tự động qua trình duyệt (đa nền tảng)")
     pf.add_argument("--topic", required=True)
+    pf.add_argument("--platform", default="facebook", help="key nền tảng (xem: uirp platforms)")
     pf.add_argument("--mode", choices=["url", "keyword", "profile", "group"], required=True)
     pf.add_argument("--value", required=True, help="URL bài / từ khóa / username / group id")
+
+    pdis = sub.add_parser("discover", help="Tự động TÌM theo từ khóa trên nhiều nền tảng (Mode B)")
+    pdis.add_argument("--topic", required=True)
+    pdis.add_argument("--keyword", required=True)
+    pdis.add_argument("--platforms", default=None,
+                      help="key cách nhau bởi phẩy (mặc định: mọi nền hỗ trợ tìm)")
 
     return p
 
@@ -455,6 +583,10 @@ _DISPATCH = {
     "backup": cmd_backup,
     "erase-entity": cmd_erase_entity,
     "fetch": cmd_fetch,
+    "discover": cmd_discover,
+    "platforms": cmd_platforms,
+    "check": cmd_check,
+    "web": cmd_web,
 }
 
 

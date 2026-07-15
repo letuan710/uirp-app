@@ -14,7 +14,7 @@ from uirp.config import Config
 from uirp.store import db
 
 _CLAIMS_SQL = """
-SELECT claim.statement, claim.asserted_by_entity_id AS by_id,
+SELECT claim.statement, claim.asserted_by_entity_id AS by_id, o.kind AS obs_kind,
        ev.content_hash, ev.tombstoned_at, io.title, io.source_url
 FROM claim
 JOIN observation o        ON claim.observation_id = o.id
@@ -79,7 +79,8 @@ def build(conn, cfg: Config, topic_id: str) -> Path:
             who = e["canonical_name"] if e else "nguồn"
         src = c["title"] or c["source_url"] or "?"
         tomb = " · ⚠️ evidence đã tombstone" if c["tombstoned_at"] else ""
-        lines.append(f"- **{who}**: {c['statement']}")
+        dich = " *(dịch từ tiếng Trung)*" if c["obs_kind"] == "translation" else ""
+        lines.append(f"- **{who}**: {c['statement']}{dich}")
         lines.append(f"  - nguồn: {src} · evidence `{c['content_hash'][:12]}`{tomb}")
 
     lines += ["", f"## Thực thể (Entities) — {len(entities)}", ""]

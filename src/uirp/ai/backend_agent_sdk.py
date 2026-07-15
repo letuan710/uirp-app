@@ -55,14 +55,22 @@ class AgentSdkBackend:
             opts = ClaudeAgentOptions(system_prompt=system, model=model)
             chunks: list[str] = []
             async for message in query(prompt=user, options=opts):
+                if type(message).__name__ == "RateLimitEvent":  # hết hạn mức thuê bao
+                    raise QuotaExceeded(message="hết hạn mức thuê bao Claude (rate limit)")
                 chunks.append(_extract_text(message))
             return "".join(chunks)
 
         try:
             text = anyio.run(_run)
+        except QuotaExceeded:
+            raise
         except Exception as e:  # noqa: BLE001 - phân loại theo thông điệp
-            msg = str(e).lower()
-            if any(h in msg for h in _QUOTA_HINTS):
+            name = type(e).__name__
+            if name in ("CLINotFoundError", "CLIConnectionError"):
+                raise ConfigError(
+                    "cần Claude Code CLI đã cài & đăng nhập cho backend thuê bao"
+                ) from e
+            if any(h in str(e).lower() for h in _QUOTA_HINTS):
                 raise QuotaExceeded(message=str(e)) from e
             raise
 
