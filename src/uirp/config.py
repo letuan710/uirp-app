@@ -26,8 +26,14 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "mode": "cdp", "cdp_port": 9222, "headless": False,
         "max_posts_per_run": 20, "collect_comments": True,
         "max_comments_per_post": 50, "scroll_depth": 5,
-        "download_images": True, "max_images_per_post": 10,
+        # Mặc định TẮT ảnh + screenshot: mục tiêu là kết quả text nhanh; mỗi ảnh
+        # tốn thời gian tải lúc quét + 1 call AI (read_image) lúc xử lý. Bật lại nếu cần.
+        "download_images": False, "max_images_per_post": 10,
+        "screenshot": False,
+        # Delay giữa các bài (anti-bot). Nền tảng "dễ" có delay riêng trong platforms.py.
         "min_delay_seconds": 20, "max_delay_seconds": 60,
+        # Số thread quét song song (mỗi thread 1 nền tảng, profile trình duyệt riêng).
+        "parallel_platforms": 3,
     },
 }
 
@@ -103,9 +109,10 @@ class Config:
 def load(root: Path | None = None) -> Config:
     """Nạp config từ ``root/config.toml`` (nếu có), trộn lên DEFAULTS."""
     root = (root or Path.cwd()).resolve()
-    data = dict(DEFAULTS)
     cfg_file = root / "config.toml"
+    user: dict[str, Any] = {}
     if cfg_file.exists():
         user = tomllib.loads(cfg_file.read_text(encoding="utf-8"))
-        data = _merge(DEFAULTS, user)
-    return Config(root=root, data=data)
+    # LUÔN đi qua _merge (kể cả user rỗng): trả bản sao sâu, caller sửa cfg.data
+    # (vd. --backend) không làm bẩn DEFAULTS toàn cục.
+    return Config(root=root, data=_merge(DEFAULTS, user))

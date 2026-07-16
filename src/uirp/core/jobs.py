@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from uirp.config import Config
-from uirp.errors import PermanentError, QuotaExceeded, TransientError, error_kind
+from uirp.errors import QuotaExceeded, TransientError, error_kind
 from uirp.ids import new_id
 from uirp.store import db
 
@@ -95,20 +95,29 @@ def _wake_due_quota(conn: sqlite3.Connection) -> None:
 
 
 def _claim_next(conn: sqlite3.Connection) -> Job | None:
-    row = conn.execute(
-        "SELECT id, job_type, payload, retry_count FROM job "
-        "WHERE state='PENDING' ORDER BY created_at LIMIT 1"
-    ).fetchone()
-    if row is None:
-        return None
-    _set_state(conn, row["id"], state="RUNNING")
-    return Job(
-        id=row["id"],
-        job_type=row["job_type"],
-        state="RUNNING",
-        payload=json.loads(row["payload"] or "{}"),
-        retry_count=row["retry_count"],
-    )
+    """Claim ATOMIC: UPDATE có điều kiện state='PENDING' — nhiều worker/thread
+    cùng chạy không thể nẫng trùng một job (kiểm tra rowcount)."""
+    while True:
+        row = conn.execute(
+            "SELECT id, job_type, payload, retry_count FROM job "
+            "WHERE state='PENDING' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        cur = conn.execute(
+            "UPDATE job SET state='RUNNING', updated_at=? WHERE id=? AND state='PENDING'",
+            (_now(), row["id"]),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            continue  # thread khác vừa claim mất → thử job kế tiếp
+        return Job(
+            id=row["id"],
+            job_type=row["job_type"],
+            state="RUNNING",
+            payload=json.loads(row["payload"] or "{}"),
+            retry_count=row["retry_count"],
+        )
 
 
 def _next_quota_wait(conn: sqlite3.Connection, cfg: Config) -> float | None:
@@ -141,6 +150,7 @@ def _execute(conn: sqlite3.Connection, cfg: Config, job: Job) -> None:
             enqueue(conn, child_type, child_payload)
         _set_state(conn, job.id, state="DONE")
     except QuotaExceeded as e:
+        conn.rollback()  # bỏ dữ liệu dở dang của handler (nếu có)
         retry_at = (
             datetime.fromtimestamp(e.retry_at, timezone.utc).isoformat()
             if e.retry_at
@@ -148,12 +158,14 @@ def _execute(conn: sqlite3.Connection, cfg: Config, job: Job) -> None:
         )
         _set_state(conn, job.id, state="WAITING_QUOTA", retry_at=retry_at, error_kind="QuotaExceeded")
     except TransientError as e:
+        conn.rollback()
         if job.retry_count + 1 < cfg.max_retry:
             _set_state(conn, job.id, state="PENDING", retry_count=job.retry_count + 1,
                        error=str(e), error_kind=error_kind(e))
         else:
             _set_state(conn, job.id, state="FAILED", error=str(e), error_kind=error_kind(e))
-    except (PermanentError, Exception) as e:  # noqa: BLE001 - mọi lỗi khác coi là vĩnh viễn
+    except Exception as e:  # noqa: BLE001 - mọi lỗi khác (gồm PermanentError) coi là vĩnh viễn
+        conn.rollback()
         _set_state(conn, job.id, state="FAILED", error=repr(e), error_kind=error_kind(e))
 
 

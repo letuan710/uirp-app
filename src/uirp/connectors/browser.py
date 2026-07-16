@@ -44,10 +44,12 @@ def _guard_checkpoint(page) -> None:
 _LAUNCH_ARGS = ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 
 
-def _attach(pw, fc: dict):
+def _attach(pw, fc: dict, profile_suffix: str = ""):
     """Trả (context, launched). CDP: gắn Chrome thật (ít bị chặn hơn — ADR-002/007).
     Chrome chưa mở debug port → TỰ CHUYỂN sang launch (trình duyệt riêng) để luôn quét được,
-    không bắt Owner phải nhớ mở Chrome trước."""
+    không bắt Owner phải nhớ mở Chrome trước.
+    profile_suffix: quét SONG SONG nhiều nền tảng — mỗi thread một profile riêng
+    (persistent context khóa profile, không mở trùng được)."""
     if fc["mode"] == "cdp":
         try:
             browser = pw.chromium.connect_over_cdp(f"http://localhost:{fc['cdp_port']}")
@@ -59,9 +61,10 @@ def _attach(pw, fc: dict):
                       f"→ tự mở trình duyệt riêng)")
             except UnicodeEncodeError:
                 print(f"  (CDP attach failed on port {fc['cdp_port']} -> fallback to launch)")
+    profile_dir = f"./browser-profile{profile_suffix}"
     try:
         context = pw.chromium.launch_persistent_context(
-            user_data_dir="./browser-profile", headless=fc["headless"], args=_LAUNCH_ARGS,
+            user_data_dir=profile_dir, headless=fc["headless"], args=_LAUNCH_ARGS,
         )
     except Exception as e:  # noqa: BLE001
         if "Executable doesn't exist" not in str(e):
@@ -73,7 +76,7 @@ def _attach(pw, fc: dict):
         except UnicodeEncodeError:
             print("  (Playwright chromium not downloaded -> using installed Google Chrome)")
         context = pw.chromium.launch_persistent_context(
-            user_data_dir="./browser-profile", headless=fc["headless"], args=_LAUNCH_ARGS,
+            user_data_dir=profile_dir, headless=fc["headless"], args=_LAUNCH_ARGS,
             channel="chrome",
         )
     return context, True
@@ -124,12 +127,15 @@ def _download_images(conn, cfg: Config, topic_id: str, page, p: Platform, fc: di
         s = img.get_attribute("src") or ""
         if s.startswith("http") and s not in srcs:
             srcs.append(s)
+    _OK_EXT = ("png", "jpg", "jpeg", "webp", "gif")
     for s in srcs[: fc.get("max_images_per_post", 10)]:
         try:
             r = page.context.request.get(s)
             if not r.ok:
                 continue
-            ext = s.rsplit(".", 1)[-1].split("?")[0][:4].lower() or "jpg"
+            ext = s.rsplit(".", 1)[-1].split("?")[0].lower()
+            if ext not in _OK_EXT:
+                ext = "jpg"  # URL không có đuôi rõ ràng → mặc định jpg
             media = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext}"
             store_and_queue(conn, cfg, topic_id, r.body(), ext, media,
                             f"{p.key}_image", s, s.rsplit("/", 1)[-1][:40], "browser_assisted")
@@ -145,13 +151,14 @@ def _capture(conn, cfg: Config, topic_id: str, page, p: Platform, url: str, fc: 
     title = url.rstrip("/").rsplit("/", 1)[-1] or url
     store_and_queue(conn, cfg, topic_id, page.content().encode("utf-8"), "html",
                     "text/html", f"{p.key}_post", url, title, "browser_assisted")
-    try:  # screenshot best-effort — lỗi (headless/sandbox) không chặn, HTML đã lưu
-        shot = page.screenshot(full_page=True, timeout=8000)
-        store_and_queue(conn, cfg, topic_id, shot, "png",
-                        "image/png", f"{p.key}_screenshot", url, title, "browser_assisted")
-    except Exception:  # noqa: BLE001
-        pass
-    if fc.get("download_images", True):
+    if fc.get("screenshot", False):
+        try:  # screenshot best-effort — lỗi (headless/sandbox) không chặn, HTML đã lưu
+            shot = page.screenshot(full_page=True, timeout=8000)
+            store_and_queue(conn, cfg, topic_id, shot, "png",
+                            "image/png", f"{p.key}_screenshot", url, title, "browser_assisted")
+        except Exception:  # noqa: BLE001
+            pass
+    if fc.get("download_images", False):
         _download_images(conn, cfg, topic_id, page, p, fc)
 
 
@@ -170,9 +177,11 @@ def collect(conn, cfg: Config, topic_id: str, platform_key: str, mode: str, valu
         ) from e
 
     fc = cfg.fetch
+    lo = p.min_delay if p.min_delay is not None else fc["min_delay_seconds"]
+    hi = p.max_delay if p.max_delay is not None else fc["max_delay_seconds"]
     captured = 0
     with sync_playwright() as pw:
-        context, launched = _attach(pw, fc)
+        context, launched = _attach(pw, fc, profile_suffix=f"-{p.key}")
         page = context.new_page()
         try:
             urls = [value] if mode == "url" else _discover(page, p, mode, value, fc)
@@ -181,7 +190,7 @@ def collect(conn, cfg: Config, topic_id: str, platform_key: str, mode: str, valu
                 _capture(conn, cfg, topic_id, page, p, url, fc)
                 captured += 1
                 if i + 1 < len(urls):  # delay giữa các bài, không delay sau bài cuối
-                    time.sleep(random.uniform(fc["min_delay_seconds"], fc["max_delay_seconds"]))
+                    time.sleep(random.uniform(lo, hi))
         finally:
             page.close()
             if launched:

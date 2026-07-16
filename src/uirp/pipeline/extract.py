@@ -21,8 +21,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _get_or_create_entity(conn, name: str, etype: str | None) -> str:
+def _get_or_create_entity(conn, name: str, etype: str | None) -> str | None:
     name = (name or "").strip()
+    if not name:
+        return None  # AI có thể trả name rỗng — không tạo entity rác
     rows = db.query(conn, "SELECT id FROM entity WHERE canonical_name=? LIMIT 1", (name,))
     if rows:
         return rows[0]["id"]
@@ -30,7 +32,7 @@ def _get_or_create_entity(conn, name: str, etype: str | None) -> str:
     db.insert(conn, "entity", {
         "id": eid, "entity_type": etype or "concept", "canonical_name": name,
         "status": "active", "created_at": _now(),
-    })
+    }, commit=False)
     db.insert(conn, "entity_alias", {
         "id": new_id("ali"), "entity_id": eid, "alias": name, "created_at": _now(),
     })
@@ -62,18 +64,21 @@ def make_handler(client: AIClient):
             t = db.get(conn, "topic", io[0]["topic_id"])
             topic_name = t["name"] if t else ""
 
-        # Cổng lọc rẻ (STD5-R5): classify tier S trước khi tốn extraction tier M.
-        rel = client.complete(
-            AIRequest(tier="S", prompt_ref="classify_relevance",
-                      payload={"text": obs["content"], "topic": topic_name}, expect_json=True),
-            conn, job_id,
-        )
-        try:
-            relevant = bool(json.loads(rel.text).get("relevant", True))
-        except json.JSONDecodeError:
-            relevant = True
-        if not relevant:
-            return []
+        # Cổng lọc rẻ (STD5-R5) — CHỈ cho nội dung phụ (comment, OCR, mô tả video).
+        # Thân bài & bản dịch: chính Owner tìm theo keyword → gần như luôn relevant,
+        # bỏ classify tiết kiệm 1 call AI/observation (nhanh + rẻ gần gấp đôi).
+        if obs["kind"] not in ("body_text", "translation"):
+            rel = client.complete(
+                AIRequest(tier="S", prompt_ref="classify_relevance",
+                          payload={"text": obs["content"], "topic": topic_name},
+                          expect_json=True),
+                conn, job_id,
+            )
+            try:
+                if not bool(json.loads(rel.text).get("relevant", True)):
+                    return []
+            except json.JSONDecodeError:
+                pass
 
         # Extraction tier M.
         resp = client.complete(
@@ -103,7 +108,7 @@ def make_handler(client: AIClient):
             db.insert(conn, "claim", {
                 "id": cid, "statement": stmt, "asserted_by_entity_id": aid,
                 "observation_id": obs["id"], "provenance": prov, "created_at": _now(),
-            })
+            }, commit=False)
             first_claim_id = first_claim_id or cid
 
         # Relationship phải tựa vào một Claim (ONT-R6).
@@ -112,13 +117,16 @@ def make_handler(client: AIClient):
                 s, p, o = r.get("subject"), r.get("predicate"), r.get("object")
                 if not (s and p and o):
                     continue
+                sid = _get_or_create_entity(conn, s, "concept")
+                oid = _get_or_create_entity(conn, o, "concept")
+                if not (sid and oid):
+                    continue
                 db.insert(conn, "relationship", {
-                    "id": new_id("rel"),
-                    "subject_entity_id": _get_or_create_entity(conn, s, "concept"),
-                    "predicate": p,
-                    "object_entity_id": _get_or_create_entity(conn, o, "concept"),
+                    "id": new_id("rel"), "subject_entity_id": sid, "predicate": p,
+                    "object_entity_id": oid,
                     "claim_id": first_claim_id, "created_at": _now(),
-                })
+                }, commit=False)
+        conn.commit()  # claims + relationships ghi trong MỘT transaction
         return []
 
     return extract

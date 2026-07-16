@@ -9,6 +9,7 @@ config.local.toml
 
 # Playwright (Mode B) — profile trình duyệt chứa cookie/session
 /browser-profile/
+/browser-profile-*/   # quét song song: mỗi nền tảng một profile
 
 # Python
 __pycache__/

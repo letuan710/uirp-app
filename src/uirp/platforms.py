@@ -7,7 +7,7 @@ và vẫn cần tinh chỉnh selector ở lần chạy thật (ADR-007/009).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from uirp.errors import ConfigError
 
@@ -24,13 +24,17 @@ class Platform:
     group_url: str | None = None    # template có {v}
     post_hints: tuple[str, ...] = ()
     note: str = ""
+    # Delay riêng giữa các bài (giây) — None = dùng fetch.min/max_delay_seconds trong config.
+    # Nền "dễ" (forum, máy tìm kiếm, video công khai) chịu được delay ngắn hơn nhiều.
+    min_delay: float | None = None
+    max_delay: float | None = None
 
 
 _P: list[Platform] = [
     # --- Web nói chung (báo chí, blog, mọi trang) qua máy tìm kiếm — ADR-011 ---
     Platform("google", "Google (web/báo chí)", "global", "https://www.google.com", True,
              "https://www.google.com/search?q={q}", None, None, ("http",),
-             note="Thu trang ĐÍCH trong kết quả tìm (mọi nguồn web); link nội bộ Google bị loại."),
+             note="Thu trang ĐÍCH trong kết quả tìm (mọi nguồn web); link nội bộ Google bị loại.", min_delay=2, max_delay=5),
     # --- VN / global ---
     Platform("facebook", "Facebook", "global", "https://www.facebook.com", True,
              "https://www.facebook.com/search/posts/?q={q}",
@@ -38,7 +42,7 @@ _P: list[Platform] = [
              ("/posts/", "/permalink/", "story_fbid=", "/videos/", "/photo")),
     Platform("youtube", "YouTube", "global", "https://www.youtube.com", True,
              "https://www.youtube.com/results?search_query={q}",
-             "https://www.youtube.com/@{v}", None, ("/watch?v=", "/shorts/")),
+             "https://www.youtube.com/@{v}", None, ("/watch?v=", "/shorts/"), min_delay=3, max_delay=6),
     Platform("tiktok", "TikTok", "global", "https://www.tiktok.com", True,
              "https://www.tiktok.com/search?q={q}", "https://www.tiktok.com/@{v}",
              None, ("/video/",)),
@@ -51,19 +55,19 @@ _P: list[Platform] = [
     Platform("zalo", "Zalo", "VN", "https://zalo.me", False,
              None, None, None, (), "Chủ yếu là app, nội dung đóng → dùng Mode A (chụp màn hình)."),
     Platform("voz", "Voz Forum", "VN", "https://voz.vn", True,
-             None, None, None, ("/t/", "/p/"), "Forum HTML — Mode A/B đều dễ."),
+             None, None, None, ("/t/", "/p/"), "Forum HTML — Mode A/B đều dễ.", min_delay=2, max_delay=5),
     Platform("tinhte", "Tinh Tế", "VN", "https://tinhte.vn", True,
-             None, None, None, ("/thread/", "/p/"), "Forum HTML."),
+             None, None, None, ("/thread/", "/p/"), "Forum HTML.", min_delay=2, max_delay=5),
     # --- China ---
     Platform("weibo", "微博 Weibo", "CN", "https://weibo.com", True,
              "https://s.weibo.com/weibo?q={q}", "https://weibo.com/{v}", None, ("/detail/",)),
     Platform("bilibili", "哔哩哔哩 Bilibili", "CN", "https://www.bilibili.com", True,
              "https://search.bilibili.com/all?keyword={q}", "https://space.bilibili.com/{v}",
-             None, ("/video/",)),
+             None, ("/video/",), min_delay=5, max_delay=10),
     Platform("zhihu", "知乎 Zhihu", "CN", "https://www.zhihu.com", True,
-             "https://www.zhihu.com/search?q={q}", None, None, ("/question/", "/answer/", "/p/")),
+             "https://www.zhihu.com/search?q={q}", None, None, ("/question/", "/answer/", "/p/"), min_delay=5, max_delay=10),
     Platform("tieba", "百度贴吧 Tieba", "CN", "https://tieba.baidu.com", True,
-             "https://tieba.baidu.com/f/search/res?qw={q}", None, None, ("/p/",)),
+             "https://tieba.baidu.com/f/search/res?qw={q}", None, None, ("/p/",), min_delay=5, max_delay=10),
     Platform("xiaohongshu", "小红书 RED", "CN", "https://www.xiaohongshu.com", False,
              None, None, None, ("/explore/",),
              "Anti-bot mạnh + chữ ký JS (như MediaCrawler) → Mode A."),

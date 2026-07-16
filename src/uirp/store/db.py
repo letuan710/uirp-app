@@ -26,6 +26,8 @@ def connect(cfg: Config) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Nhiều thread (worker + web + scan) cùng ghi: chờ lock thay vì ném 'database is locked'.
+    conn.execute("PRAGMA busy_timeout = 10000")
     _migrate(conn)
     return conn
 
@@ -70,11 +72,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # mọi GIÁ TRỊ đều tham số hóa bằng '?'.
 
 
-def insert(conn: sqlite3.Connection, table: str, row: dict[str, Any]) -> str:
+def insert(
+    conn: sqlite3.Connection, table: str, row: dict[str, Any], commit: bool = True
+) -> str:
+    """commit=False: gộp nhiều insert vào một transaction, caller tự commit
+    (job handler ghi theo lô để crash giữa chừng không để lại dữ liệu dở dang)."""
     cols = ", ".join(row.keys())
     placeholders = ", ".join("?" * len(row))
     conn.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", tuple(row.values()))
-    conn.commit()
+    if commit:
+        conn.commit()
     return str(row.get("id", ""))
 
 

@@ -25,6 +25,9 @@ def route_obs(content: str, obs_id: str) -> tuple[str, dict]:
     return ("translate" if is_chinese(content) else "extract", {"obs_id": obs_id})
 
 _SKIP = ("script", "style", "title", "head", "noscript")
+# Void element không có endtag — KHÔNG đẩy vào _ctx, nếu không context role bị ô nhiễm.
+_VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input",
+                   "link", "meta", "param", "source", "track", "wbr"})
 
 
 def _class_of(attrs: list[tuple[str, str | None]]) -> str:
@@ -55,6 +58,8 @@ class _StructuredExtractor(HTMLParser):
             d = dict(attrs)
             if d.get("src"):
                 self.images.append({"src": d.get("src", ""), "alt": d.get("alt", "") or ""})
+            return
+        if tag in _VOID:
             return
         cls = _class_of(attrs)
         role: str | None = None
@@ -115,13 +120,14 @@ def _decode_html(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _add_obs(conn, evidence_id: str, kind: str, content: str, locator: dict | None = None) -> str:
+def _add_obs(conn, evidence_id: str, kind: str, content: str, locator: dict | None = None,
+             commit: bool = True) -> str:
     obs_id = new_id("obs")
     db.insert(conn, "observation", {
         "id": obs_id, "evidence_id": evidence_id, "kind": kind, "content": content,
         "locator": json.dumps(locator, ensure_ascii=False) if locator else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }, commit=commit)
     return obs_id
 
 
@@ -155,15 +161,20 @@ def make_handler(client: AIClient):
             except Exception:  # noqa: BLE001
                 pass
             body = "\n".join(ext.body).strip()
+            # Ghi TẤT CẢ observation trong MỘT transaction: crash giữa chừng không để lại
+            # trạng thái dở dang (idempotency check "đã có observation" mới an toàn).
             if body:
                 loc = {"author": ext.post_author} if ext.post_author else None
-                oid = _add_obs(conn, ev["id"], "body_text", body, loc)
+                oid = _add_obs(conn, ev["id"], "body_text", body, loc, commit=False)
                 children.append(route_obs(body, oid))
             for c in ext.comments:
-                oid = _add_obs(conn, ev["id"], "comment", c["text"], {"author": c["author"]})
+                oid = _add_obs(conn, ev["id"], "comment", c["text"], {"author": c["author"]},
+                               commit=False)
                 children.append(route_obs(c["text"], oid))
             for img in ext.images:
-                _add_obs(conn, ev["id"], "image_ref", img.get("alt") or "(ảnh)", img)
+                _add_obs(conn, ev["id"], "image_ref", img.get("alt") or "(ảnh)", img,
+                         commit=False)
+            conn.commit()
         if is_video_url(io["source_url"]):
             # Trang video: nội dung thật nằm TRONG video → trích phụ đề (ADR-011).
             children.append(("transcribe", {"evidence_id": ev["id"], "url": io["source_url"]}))

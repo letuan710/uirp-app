@@ -19,6 +19,7 @@ python -m uirp topic add "Chủ đề của tôi"  # → in ra top_...
 python -m uirp ingest --topic top_XXX      # nuốt file → evidence + job
 python -m uirp run --once                  # parse → extract → tri thức
 python -m uirp report --topic top_XXX      # → data/reports/top_XXX.md
+python -m uirp web                         # web 1 nút: tìm → quét SONG SONG → tự xử lý → báo cáo
 python -m uirp cost                        # token/chi phí theo tier
 python -m uirp jobs                         # trạng thái job
 python -m uirp doctor                       # gom lỗi FAILED lặp
