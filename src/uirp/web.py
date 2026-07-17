@@ -45,10 +45,14 @@ def _scan_active() -> bool:
         return any(v["state"] in ("queued", "scanning") for v in _SCAN.values())
 
 
-# Nền tảng chỉ có nội dung tiếng Trung → dịch trước khi tìm; Google tìm thêm cả tiếng
-# Anh/Trung để vét nội dung không viết bằng tiếng Việt (ADR-012).
+# Quy tắc ngôn ngữ tìm kiếm (theo yêu cầu Owner — ADR-012):
+# - Nền TOÀN CẦU (Google/YouTube/Facebook/TikTok/X/Instagram/Threads): tìm ĐA NGÔN NGỮ
+#   (Việt gốc + Anh + Trung) — nội dung liên quan có thể đăng bằng bất kỳ ngôn ngữ nào.
+# - Nền NỘI ĐỊA TRUNG QUỐC (Weibo/Bilibili/Zhihu/Tieba): dịch sang tiếng Trung — tìm
+#   nguyên văn tiếng Việt trên các nền này gần như chắc chắn ra 0 kết quả liên quan.
+# - Nền nội địa Việt Nam (Zalo/Voz/Tinh Tế): giữ nguyên tiếng Việt.
 _CN_LANG = "tiếng Trung giản thể (Simplified Chinese)"
-_GOOGLE_LANGS = ("tiếng Anh (English)", _CN_LANG)
+_GLOBAL_LANGS = ("tiếng Anh (English)", _CN_LANG)
 
 
 def _translate_keyword(cfg: Config, keyword: str, lang: str) -> str | None:
@@ -70,8 +74,8 @@ def _translate_keyword(cfg: Config, keyword: str, lang: str) -> str | None:
 
 def _search_queries(cfg: Config, keyword: str, p: platforms.Platform) -> list[str]:
     """Các biến thể từ khóa cần tìm cho 1 nền tảng — dịch sang ngôn ngữ bản địa."""
-    if p.key == "google":
-        langs = _GOOGLE_LANGS
+    if p.region == "global":
+        langs = _GLOBAL_LANGS
     elif p.region == "CN":
         langs = (_CN_LANG,)
     else:

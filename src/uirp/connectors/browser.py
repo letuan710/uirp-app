@@ -101,11 +101,36 @@ def _dismiss_consent(page) -> None:
             continue
 
 
+# Nền tảng mà TÌM KIẾM cần đăng nhập mới ra kết quả thật (không đăng nhập → trang tự
+# nhét gợi ý không liên quan, có vẻ như "quét được" nhưng thực ra là rác). Phát hiện qua
+# cụm text đặc trưng trên trang — đã xác nhận thật với Bilibili (ADR-012).
+_SEARCH_LOGIN_WALL = {"bilibili": "登录后你可以"}
+
+
+def _guard_search_login_wall(page, p: Platform) -> None:
+    text = _SEARCH_LOGIN_WALL.get(p.key)
+    if not text:
+        return
+    try:
+        body = page.inner_text("body", timeout=3000)
+    except Exception:  # noqa: BLE001
+        return
+    if text in body:
+        raise PermanentError(
+            f"{p.display}: tìm kiếm cần đăng nhập (chưa đăng nhập → không có kết quả "
+            f"thật, trang tự nhét gợi ý KHÔNG LIÊN QUAN) — dùng mode=cdp bám Chrome thật "
+            f"đã đăng nhập."
+        )
+
+
 def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
     page.goto(_mode_url(p, mode, value), wait_until="domcontentloaded")
     if p.key in ("google", "youtube"):
         _dismiss_consent(page)
+    if p.key in _SEARCH_LOGIN_WALL:
+        page.wait_for_timeout(2500)  # nội dung (kể cả tường đăng nhập) render bằng JS
     _guard_checkpoint(page)
+    _guard_search_login_wall(page, p)
     hints = p.post_hints or ("/posts/",)
     urls: list[str] = []
     for _ in range(fc["scroll_depth"]):

@@ -77,7 +77,9 @@ _P: list[Platform] = [
     Platform("bilibili", "哔哩哔哩 Bilibili", "CN", "https://www.bilibili.com", True,
              "https://search.bilibili.com/all?keyword={q}", "https://space.bilibili.com/{v}",
              None, ("/video/",),
-             "Không cần đăng nhập để tìm/xem công khai.", min_delay=5, max_delay=10),
+             "TÌM KIẾM cần đăng nhập (đã xác nhận: không đăng nhập → cả 7 mục kết quả đều "
+             "0, trang tự nhét video gợi ý không liên quan) — xem video lẻ vẫn công khai.",
+             min_delay=5, max_delay=10),
     Platform("zhihu", "知乎 Zhihu", "CN", "https://www.zhihu.com", True,
              "https://www.zhihu.com/search?q={q}", None, None, ("/question/", "/answer/", "/p/"),
              "Xem được một phần khi chưa đăng nhập; có tài khoản thấy đầy đủ câu trả lời hơn.",
