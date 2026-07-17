@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import random
 import time
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from uirp.config import Config
 from uirp.connectors.common import store_and_queue
@@ -123,6 +123,20 @@ def _guard_search_login_wall(page, p: Platform) -> None:
         )
 
 
+def _unwrap_google_redirect(url: str) -> str:
+    """Google đôi khi bọc link kết quả qua /url?q=<đích thật>&... (hoặc tham số 'url') —
+    bóc URL đích ra. CHỈ áp dụng cho path "/url" (link bọc thật) — path khác (vd.
+    "/search?q=..." là tìm kiếm liên quan nội bộ) trả nguyên vẹn (ADR-012)."""
+    parsed = urlparse(url)
+    if "google." not in parsed.netloc or parsed.path != "/url":
+        return url
+    qs = parse_qs(parsed.query)
+    for key in ("q", "url"):
+        if qs.get(key):
+            return qs[key][0]
+    return url
+
+
 def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
     page.goto(_mode_url(p, mode, value), wait_until="domcontentloaded")
     if p.key in ("google", "youtube"):
@@ -140,6 +154,10 @@ def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
             # nếu không page.goto() sau này sẽ báo "invalid URL" (không phải lỗi môi trường).
             full = urljoin(page.url, href)
             if p.key == "google":
+                # Google đôi khi bọc link kết quả qua /url?q=<đích thật>&... — bóc URL đích
+                # ra trước khi lọc, nếu không sẽ loại nhầm cả kết quả thật (chứa "google."
+                # trong URL bọc dù đích đến là trang ngoài — ADR-012).
+                full = _unwrap_google_redirect(full)
                 # Máy tìm kiếm: chỉ lấy trang ĐÍCH bên ngoài, loại link nội bộ Google.
                 if (not full.startswith("http")
                         or any(d in full for d in ("google.", "gstatic.", "googleusercontent."))):
