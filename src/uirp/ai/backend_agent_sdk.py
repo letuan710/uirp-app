@@ -14,7 +14,7 @@ from typing import Any
 
 from uirp.ai.adapter import AIRequest, AIResponse
 from uirp.config import Config
-from uirp.errors import ConfigError, QuotaExceeded
+from uirp.errors import ConfigError, QuotaExceeded, TransientError
 
 _QUOTA_HINTS = ("rate limit", "quota", "usage limit", "429", "overloaded")
 
@@ -51,18 +51,54 @@ class AgentSdkBackend:
                 "(pip install claude-agent-sdk)"
             ) from e
 
+        # cli_path (tùy chọn): trỏ tới claude.exe đã cài+đăng nhập sẵn trên máy Owner,
+        # phòng khi SDK không tự tìm ra (Claude Code không nằm trên PATH). Nếu để trống,
+        # SDK dùng bản claude.exe đóng gói kèm theo.
+        cli_path = self.cfg.data.get("api", {}).get("cli_path") or None
+        opts_kwargs: dict[str, Any] = {"system_prompt": system, "model": model}
+        if cli_path:
+            opts_kwargs["cli_path"] = cli_path
+
         async def _run() -> str:
-            opts = ClaudeAgentOptions(system_prompt=system, model=model)
+            opts = ClaudeAgentOptions(**opts_kwargs)
             chunks: list[str] = []
             async for message in query(prompt=user, options=opts):
-                if type(message).__name__ == "RateLimitEvent":  # hết hạn mức thuê bao
-                    raise QuotaExceeded(message="hết hạn mức thuê bao Claude (rate limit)")
+                name = type(message).__name__
+                if name == "RateLimitEvent":
+                    # Sự kiện này bắn ra MỖI KHI trạng thái rate-limit đổi (kể cả
+                    # 'allowed'/'allowed_warning' khi VẪN CÒN quota) — CHỈ 'rejected' mới
+                    # là hết thật (types.py). Còn lại là thông báo, bỏ qua & chạy tiếp.
+                    info = getattr(message, "rate_limit_info", None)
+                    if getattr(info, "status", None) == "rejected":
+                        raise QuotaExceeded(
+                            retry_at=getattr(info, "resets_at", None),
+                            message="hết hạn mức thuê bao Claude (rejected)",
+                        )
+                    continue
+                if name == "ResultMessage" and getattr(message, "is_error", False):
+                    # CLI báo is_error=True kèm subtype="success" khi lượt gọi API bên dưới
+                    # lỗi — thông điệp thật nằm ở .errors hoặc .result (đã quan sát:
+                    # "Not logged in · Please run /login" chỉ có trong .result).
+                    status = getattr(message, "api_error_status", None)
+                    errs = getattr(message, "errors", None) or []
+                    result_text = (getattr(message, "result", None) or "").strip()
+                    detail = ("; ".join(errs) or result_text
+                              or (f"HTTP {status}" if status else "lỗi API không rõ"))
+                    low = detail.lower()
+                    if "not logged in" in low or "/login" in low:
+                        raise ConfigError(
+                            "Claude CLI CHƯA ĐĂNG NHẬP — mở PowerShell chạy `claude` "
+                            "rồi gõ `/login` (một lần duy nhất), sau đó chạy lại."
+                        )
+                    if status == 429 or any(h in low for h in _QUOTA_HINTS):
+                        raise QuotaExceeded(message=f"Claude API rate-limit ({detail})")
+                    raise TransientError(f"Claude Code báo lỗi: {detail}")
                 chunks.append(_extract_text(message))
             return "".join(chunks)
 
         try:
             text = anyio.run(_run)
-        except QuotaExceeded:
+        except (QuotaExceeded, TransientError, ConfigError):
             raise
         except Exception as e:  # noqa: BLE001 - phân loại theo thông điệp
             name = type(e).__name__
@@ -72,7 +108,10 @@ class AgentSdkBackend:
                 ) from e
             if any(h in str(e).lower() for h in _QUOTA_HINTS):
                 raise QuotaExceeded(message=str(e)) from e
-            raise
+            # Exception còn lại từ tiến trình CLI (ProcessError, mất kết nối giữa chừng...)
+            # đa phần là tạm thời (mạng/CLI hiccup) — cho retry thay vì rớt vĩnh viễn ngay
+            # lần đầu (đã quan sát thực tế: coi là PermanentError làm rớt ~80% dữ liệu oan).
+            raise TransientError(str(e)) from e
 
         return AIResponse(
             text=text, model=model,

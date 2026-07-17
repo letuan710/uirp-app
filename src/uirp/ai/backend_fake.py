@@ -26,6 +26,9 @@ class FakeBackend:
             out = ""  # FakeBackend không đọc được ảnh — backend Claude thật mới OCR được
         elif req.prompt_ref == "translate":
             out = f"[VI-giả] {text_in}"  # FakeBackend không dịch thật — chỉ đánh dấu để demo flow
+        elif req.prompt_ref == "translate_query":
+            lang = str(req.payload.get("lang", "?"))
+            out = f"[{lang}-giả] {text_in}"
         else:
             out = "{}"
         return AIResponse(

@@ -91,6 +91,31 @@ def cmd_web(cfg: config.Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ping(cfg: config.Config, args: argparse.Namespace) -> int:
+    """Gọi Claude đúng 1 lần để kiểm tra backend đăng nhập/hoạt động chưa (ADR-012)."""
+    from uirp.ai.adapter import AIClient, AIRequest
+    from uirp.errors import ConfigError, QuotaExceeded, TransientError
+
+    print(f"Đang thử gọi Claude thật (backend={cfg.backend})…")
+    try:
+        resp = AIClient(cfg).complete(
+            AIRequest(tier="S", prompt_ref="translate_query",
+                      payload={"text": "xin chào", "lang": "tiếng Anh (English)"})
+        )
+        print(f"  ✔ THÀNH CÔNG. Claude trả về: {resp.text.strip()[:80]!r}")
+        print("  → Backend hoạt động. Chạy 'uirp web' rồi xử lý bình thường.")
+        return 0
+    except ConfigError as e:
+        print(f"  ✘ CẤU HÌNH/ĐĂNG NHẬP: {e}", file=sys.stderr)
+        return 1
+    except QuotaExceeded as e:
+        print(f"  ⚠ HẾT HẠN MỨC (nhưng đăng nhập OK): {e}", file=sys.stderr)
+        return 2
+    except TransientError as e:
+        print(f"  ⚠ LỖI TẠM THỜI (thử lại sau): {e}", file=sys.stderr)
+        return 3
+
+
 def cmd_check(cfg: config.Config, args: argparse.Namespace) -> int:
     import importlib.util
 
@@ -489,6 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--interval", type=int, default=60, help="Giây nghỉ giữa các vòng khi --loop")
 
     sub.add_parser("check", help="Kiểm tra sẵn sàng: đã đủ chạy chưa, còn thiếu gì (ADR-010)")
+    sub.add_parser("ping", help="Gọi Claude 1 lần để kiểm tra backend đăng nhập/hoạt động chưa")
     pw = sub.add_parser("web", help="Mở giao diện web nhập liệu (local, ADR-010)")
     pw.add_argument("--port", type=int, default=8787)
     pw.add_argument("--no-open", action="store_true", help="Không tự mở trình duyệt")
@@ -588,15 +614,23 @@ _DISPATCH = {
     "discover": cmd_discover,
     "platforms": cmd_platforms,
     "check": cmd_check,
+    "ping": cmd_ping,
     "web": cmd_web,
 }
 
 
 def _force_utf8() -> None:
-    """Console Windows mặc định cp1252 không in được tiếng Việt — ép UTF-8."""
+    """Console Windows mặc định cp1252 không in được tiếng Việt — ép UTF-8.
+
+    line_buffering=True: cmd.exe (conhost cũ) có thể chặn-buffer stdout (chỉ xả khi đầy
+    ~4KB) trong khi PowerShell/Windows Terminal xả theo dòng — khiến log tưởng như "không
+    chạy" dù thực ra đang chạy, chỉ là chưa hiện. Ép xả theo dòng cho nhất quán mọi console.
+    """
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+            stream.reconfigure(  # type: ignore[union-attr]
+                encoding="utf-8", errors="replace", line_buffering=True
+            )
         except (AttributeError, ValueError):
             pass
 

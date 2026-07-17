@@ -82,8 +82,24 @@ def _attach(pw, fc: dict, profile_suffix: str = ""):
     return context, True
 
 
+def _dismiss_consent(page) -> None:
+    """Google/YouTube hay chặn màn hình đồng ý cookie trước kết quả thật ở profile mới —
+    bấm qua (best-effort, im lặng nếu không có) để không mất trắng kết quả (ADR-012)."""
+    for text in ("Reject all", "Từ chối tất cả", "I agree", "Tôi đồng ý", "Accept all"):
+        try:
+            btn = page.get_by_role("button", name=text, exact=False)
+            if btn.count() > 0:
+                btn.first.click(timeout=2000)
+                page.wait_for_timeout(500)
+                return
+        except Exception:  # noqa: BLE001 - không có nút này, thử nút khác
+            continue
+
+
 def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
     page.goto(_mode_url(p, mode, value), wait_until="domcontentloaded")
+    if p.key in ("google", "youtube"):
+        _dismiss_consent(page)
     _guard_checkpoint(page)
     hints = p.post_hints or ("/posts/",)
     urls: list[str] = []
@@ -143,19 +159,39 @@ def _download_images(conn, cfg: Config, topic_id: str, page, p: Platform, fc: di
             continue
 
 
+def _goto_with_wayback_fallback(page, url: str) -> str:
+    """Mở URL; trang sập/mất (lỗi mạng hoặc HTTP 4xx/5xx) → thử bản lưu Wayback Machine
+    (ADR-012). Trả về URL THỰC TẾ đã mở được (gốc hoặc bản lưu trữ)."""
+    try:
+        resp = page.goto(url, wait_until="domcontentloaded")
+        if resp is not None and resp.status >= 400:
+            raise PermanentError(f"HTTP {resp.status}")
+        return url
+    except Exception:  # noqa: BLE001 - trang gốc lỗi, thử Wayback Machine trước khi bỏ cuộc
+        wb_url = f"https://web.archive.org/web/2/{url}"
+        try:
+            page.goto(wb_url, wait_until="domcontentloaded")
+        except Exception:  # noqa: BLE001
+            # goto lỗi trước có thể còn đang chuyển sang trang lỗi nội bộ của Chrome
+            # (chrome-error://...), đụng độ điều hướng — chờ ổn định rồi thử lại 1 lần.
+            page.wait_for_timeout(1000)
+            page.goto(wb_url, wait_until="domcontentloaded")
+        return wb_url
+
+
 def _capture(conn, cfg: Config, topic_id: str, page, p: Platform, url: str, fc: dict) -> None:
-    page.goto(url, wait_until="domcontentloaded")
+    actual_url = _goto_with_wayback_fallback(page, url)
     _guard_checkpoint(page)
     if fc["collect_comments"]:
         _expand_comments(page, fc["max_comments_per_post"])
     title = url.rstrip("/").rsplit("/", 1)[-1] or url
     store_and_queue(conn, cfg, topic_id, page.content().encode("utf-8"), "html",
-                    "text/html", f"{p.key}_post", url, title, "browser_assisted")
+                    "text/html", f"{p.key}_post", actual_url, title, "browser_assisted")
     if fc.get("screenshot", False):
         try:  # screenshot best-effort — lỗi (headless/sandbox) không chặn, HTML đã lưu
             shot = page.screenshot(full_page=True, timeout=8000)
             store_and_queue(conn, cfg, topic_id, shot, "png",
-                            "image/png", f"{p.key}_screenshot", url, title, "browser_assisted")
+                            "image/png", f"{p.key}_screenshot", actual_url, title, "browser_assisted")
         except Exception:  # noqa: BLE001
             pass
     if fc.get("download_images", False):

@@ -28,6 +28,21 @@ _SKIP = ("script", "style", "title", "head", "noscript")
 # Void element không có endtag — KHÔNG đẩy vào _ctx, nếu không context role bị ô nhiễm.
 _VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input",
                    "link", "meta", "param", "source", "track", "wbr"})
+# Đuôi/từ khóa hay gặp ở icon/logo giao diện web (KHÔNG phải ảnh nội dung) — lọc bớt rác
+# khi quét cả trang (chưa có selector riêng từng nền tảng — ADR-007/012).
+_ICON_HINTS = ("icon", "logo", "favicon", "sprite", "avatar", "loading_logo")
+
+
+def _looks_like_icon(src: str, w: str | None, h: str | None) -> bool:
+    if src.startswith("data:"):
+        return True  # ảnh nhúng base64 luôn là icon/spacer, không phải ảnh nội dung
+    try:
+        if w and h and int(float(w)) <= 48 and int(float(h)) <= 48:
+            return True
+    except ValueError:
+        pass
+    low = src.lower()
+    return any(h in low for h in _ICON_HINTS)
 
 
 def _class_of(attrs: list[tuple[str, str | None]]) -> str:
@@ -45,6 +60,7 @@ class _StructuredExtractor(HTMLParser):
         self.body: list[str] = []
         self.comments: list[dict[str, Any]] = []
         self.images: list[dict[str, str]] = []
+        self._seen_img_src: set[str] = set()
         self.post_author: str | None = None
         self._skip = 0
         self._ctx: list[tuple[str, str | None]] = []  # role ∈ {None,'comment','author','post_author'}
@@ -56,8 +72,12 @@ class _StructuredExtractor(HTMLParser):
             return
         if tag == "img":
             d = dict(attrs)
-            if d.get("src"):
-                self.images.append({"src": d.get("src", ""), "alt": d.get("alt", "") or ""})
+            src = d.get("src") or ""
+            if src and src not in self._seen_img_src and not _looks_like_icon(
+                src, d.get("width"), d.get("height")
+            ):
+                self._seen_img_src.add(src)
+                self.images.append({"src": src, "alt": d.get("alt", "") or ""})
             return
         if tag in _VOID:
             return
