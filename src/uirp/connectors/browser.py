@@ -37,8 +37,13 @@ def _mode_url(p: Platform, mode: str, value: str) -> str:
 
 def _guard_checkpoint(page) -> None:
     u = (page.url or "").lower()
-    if any(x in u for x in ("checkpoint", "/login", "captcha", "verify")):
-        raise PermanentError("gặp checkpoint/login/CAPTCHA — DỪNG phiên, KHÔNG tự giải (ADR-002)")
+    # "sorry" = trang chặn bot của Google (google.com/sorry/index?...) — quan sát thật
+    # khi tìm bằng trình duyệt tự động không có lịch sử duyệt web (ADR-012).
+    if any(x in u for x in ("checkpoint", "/login", "captcha", "verify", "/sorry/")):
+        raise PermanentError(
+            "gặp checkpoint/login/CAPTCHA/chặn-bot — DỪNG phiên, KHÔNG tự giải (ADR-002). "
+            "Với Google: dùng mode=cdp bám Chrome thật đã đăng nhập để giảm bị chặn."
+        )
 
 
 _LAUNCH_ARGS = ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]

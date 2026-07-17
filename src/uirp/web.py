@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from uirp import curate, platforms
+from uirp.ai.adapter import AIClient, AIRequest
 from uirp.config import Config
 from uirp.connectors import browser, manual
 from uirp.core import jobs
@@ -44,26 +45,80 @@ def _scan_active() -> bool:
         return any(v["state"] in ("queued", "scanning") for v in _SCAN.values())
 
 
+# Nền tảng chỉ có nội dung tiếng Trung → dịch trước khi tìm; Google tìm thêm cả tiếng
+# Anh/Trung để vét nội dung không viết bằng tiếng Việt (ADR-012).
+_CN_LANG = "tiếng Trung giản thể (Simplified Chinese)"
+_GOOGLE_LANGS = ("tiếng Anh (English)", _CN_LANG)
+
+
+def _translate_keyword(cfg: Config, keyword: str, lang: str) -> str | None:
+    conn = db.connect(cfg)
+    try:
+        resp = AIClient(cfg).complete(
+            AIRequest(tier="S", prompt_ref="translate_query",
+                      payload={"text": keyword, "lang": lang}),
+            conn, None,
+        )
+        q = resp.text.strip().strip('"')
+        return q or None
+    except Exception as e:  # noqa: BLE001 - dịch lỗi thì bỏ biến thể này, không chặn tìm
+        _log(f"dịch từ khóa sang {lang} lỗi — {_short_err(e)}")
+        return None
+    finally:
+        conn.close()
+
+
+def _search_queries(cfg: Config, keyword: str, p: platforms.Platform) -> list[str]:
+    """Các biến thể từ khóa cần tìm cho 1 nền tảng — dịch sang ngôn ngữ bản địa."""
+    if p.key == "google":
+        langs = _GOOGLE_LANGS
+    elif p.region == "CN":
+        langs = (_CN_LANG,)
+    else:
+        return [keyword]
+    out = [keyword]
+    for lang in langs:
+        q = _translate_keyword(cfg, keyword, lang)
+        if q and q not in out:
+            out.append(q)
+    return out
+
+
 def _scan_one(cfg: Config, topic_id: str, keyword: str, pkey: str) -> None:
-    """Chạy trong thread pool — mỗi nền tảng một connection DB + một browser profile."""
+    """Chạy trong thread pool — mỗi nền tảng một connection DB + một browser profile.
+    Tìm lần lượt theo từng biến thể ngôn ngữ (CN/Google đa ngôn ngữ), cộng dồn kết quả."""
     if _STOP.is_set():
         with _SCAN_LOCK:
             _SCAN[pkey].update(state="cancelled", msg="đã dừng trước khi quét")
         return
     with _SCAN_LOCK:
         _SCAN[pkey].update(state="scanning")
-    conn = db.connect(cfg)
-    try:
-        n = browser.collect(conn, cfg, topic_id, pkey, "keyword", keyword)
+    p = platforms.get(pkey)
+    queries = _search_queries(cfg, keyword, p)
+    total = 0
+    errs: list[str] = []
+    for q in queries:
+        if _STOP.is_set():
+            break
+        conn = db.connect(cfg)
+        try:
+            total += browser.collect(conn, cfg, topic_id, pkey, "keyword", q)
+        except Exception as e:  # noqa: BLE001 - 1 biến thể lỗi không chặn biến thể khác
+            msg = _short_err(e)
+            errs.append(msg)
+            if "chặn-bot" in msg or "CAPTCHA" in msg:
+                break  # đã bị chặn — thử thêm biến thể khác chỉ tổ bị chặn nặng hơn
+        finally:
+            conn.close()
+    tag = f" (đã dịch: {', '.join(queries[1:])})" if len(queries) > 1 else ""
+    if total == 0 and errs:
         with _SCAN_LOCK:
-            _SCAN[pkey].update(state="done", n=n)
-        _log(f"quét {pkey}: {n} bài")
-    except Exception as e:  # noqa: BLE001
+            _SCAN[pkey].update(state="error", msg="; ".join(errs)[:200])
+        _log(f"quét {pkey}{tag}: lỗi — {'; '.join(errs)[:200]}")
+    else:
         with _SCAN_LOCK:
-            _SCAN[pkey].update(state="error", msg=_short_err(e))
-        _log(f"quét {pkey}: lỗi — {_short_err(e)}")
-    finally:
-        conn.close()
+            _SCAN[pkey].update(state="done", n=total)
+        _log(f"quét {pkey}{tag}: {total} bài")
 
 
 # ---------------------------------------------------------------- worker nền
