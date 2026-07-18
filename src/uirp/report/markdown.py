@@ -115,13 +115,27 @@ def build(conn, cfg: Config, topic_id: str) -> Path:
     ]
 
     # --- 1. NỘI DUNG ĐỌC ĐƯỢC theo nguồn (phần Owner cần nhất — ADR-012) ---
+    # CHỈ hiện nguồn ĐÚNG TRỌNG TÂM: có ≥1 claim — tức đã qua cổng classify_relevance và
+    # AI xác nhận liên quan chủ đề. Nguồn quét về nhưng bị chấm "không liên quan" (trang
+    # video nhạc/giải trí lọt vào từ khu gợi ý...) không còn tràn vào báo cáo nữa —
+    # quan sát thật: 106 nguồn hiển thị nhưng chỉ ~20 nguồn có claim về đúng chủ đề.
+    relevant_ios = {r["id"] for r in db.query(conn, """
+        SELECT DISTINCT io.id FROM claim
+        JOIN observation o ON claim.observation_id = o.id
+        JOIN information_object io ON io.evidence_id = o.evidence_id
+        WHERE io.topic_id = ?
+    """, (topic_id,))}
     # Mỗi nguồn lấy 1 bản text tốt nhất (dịch > transcript > mô tả video > thân bài);
     # bỏ text ngắn/rác giao diện; khử trùng lặp nội dung (cùng video thu nhiều lần).
     best: dict[str, dict] = {}
     seen_content: set[str] = set()
+    offtopic_ios: set[str] = set()
     for row in contents:
         text = " ".join((row["content"] or "").split())
         if row["io_id"] in best or len(text) < 120 or _is_ui_junk(text):
+            continue
+        if row["io_id"] not in relevant_ios:
+            offtopic_ios.add(row["io_id"])
             continue
         sig = text[:200]
         if sig in seen_content:
@@ -131,7 +145,10 @@ def build(conn, cfg: Config, topic_id: str) -> Path:
     kind_label = {"translation": "bản dịch tiếng Việt", "transcript": "transcript video",
                   "video_description": "mô tả video", "body_text": "thân bài",
                   "comment": "bình luận"}
-    lines += [f"## Nội dung thu được — {len(best)} nguồn có nội dung đọc được", ""]
+    lines += [f"## Nội dung thu được — {len(best)} nguồn ĐÚNG chủ đề", ""]
+    if offtopic_ios:
+        lines += [f"*({len(offtopic_ios)} nguồn khác đã quét về nhưng AI chấm KHÔNG liên "
+                  "quan chủ đề hoặc chưa xử lý xong — đã ẩn khỏi báo cáo.)*", ""]
     if not best:
         lines += ["*(chưa có — nguồn đã thu nhưng chưa xử lý xong, hoặc trang chỉ có "
                   "giao diện không có bài viết. Chạy xử lý rồi xem lại.)*", ""]

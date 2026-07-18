@@ -35,7 +35,13 @@ _P: list[Platform] = [
     Platform("google", "Google (web/báo chí)", "global", "https://www.google.com", True,
              "https://www.google.com/search?q={q}", None, None, ("http",),
              note="Thu trang ĐÍCH trong kết quả tìm (mọi nguồn web); link nội bộ Google bị loại. "
-                  "Không cần đăng nhập; dò nhiều có thể gặp CAPTCHA.", min_delay=2, max_delay=5),
+                  "Không cần đăng nhập; dò nhiều có thể gặp CAPTCHA (headless=false → tự giải "
+                  "được trong cửa sổ hiện ra).", min_delay=2, max_delay=5),
+    Platform("bing", "Bing (web/báo chí, dự phòng)", "global", "https://www.bing.com", True,
+             "https://www.bing.com/search?q={q}", None, None, ("http",),
+             note="Phương án dự phòng khi Google bị chặn — cùng kiểu thu trang ĐÍCH ngoài. "
+                  "Đã xác nhận thật CŨNG gặp CAPTCHA riêng ('giải quyết thử thách') — "
+                  "headless=false tự giải được.", min_delay=2, max_delay=5),
     # --- VN / global ---
     Platform("facebook", "Facebook", "global", "https://www.facebook.com", True,
              "https://www.facebook.com/search/posts/?q={q}",

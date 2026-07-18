@@ -35,35 +35,73 @@ def _mode_url(p: Platform, mode: str, value: str) -> str:
     return tmpl.format(q=value, v=value)
 
 
-def _guard_checkpoint(page) -> None:
+# Chặn dạng CÓ THỂ TỰ GIẢI (CAPTCHA/đăng nhập) — cho Owner cơ hội tự bấm trong cửa sổ
+# thật (headless=false) thay vì dừng ngay. Khác với chặn hạ tầng CDN/WAF bên dưới —
+# dạng đó KHÔNG có gì để bấm, tự giải cũng vô ích.
+_CHECKPOINT_URL_HINTS = ("checkpoint", "/login", "captcha", "verify", "/sorry/")
+_CHECKPOINT_CONTENT_HINTS = (
+    "giải quyết thử thách",       # Bing: "Vui lòng giải quyết thử thách bên dưới" (thật)
+    "verify you are human", "i'm not a robot", "solve the puzzle",
+)
+# Chặn HẠ TẦNG (CDN/WAF) — giữ nguyên URL, không có gì để người dùng bấm/giải, dừng ngay.
+_HARD_BLOCK_CONTENT_HINTS = ("something wrong with the server",)  # TikTok (thật)
+
+
+def _wait_for_manual_solve(page, timeout_s: int = 120) -> bool:
+    """headless=false: cửa sổ trình duyệt hiện ra cho Owner thấy — CHỜ Owner tự giải
+    CAPTCHA/đăng nhập ngay trong cửa sổ đó (máy KHÔNG tự giải — vẫn đúng ADR-002, chỉ là
+    người thật giải thay vì bỏ cuộc ngay). Trả True nếu thoát được trang chặn kịp lúc."""
+    try:
+        print(f"  (gặp CAPTCHA/checkpoint — cửa sổ trình duyệt đang mở, bạn có "
+              f"{timeout_s}s để tự giải, app sẽ tự tiếp tục ngay khi qua được…)")
+    except UnicodeEncodeError:
+        print(f"  (CAPTCHA/checkpoint detected - solve manually within {timeout_s}s)")
+    waited = 0
+    step = 3000
+    while waited < timeout_s * 1000:
+        page.wait_for_timeout(step)
+        waited += step
+        cur = (page.url or "").lower()
+        if not any(x in cur for x in _CHECKPOINT_URL_HINTS):
+            return True
+    return False
+
+
+def _fail_or_pause(page, fc: dict, reason: str) -> None:
+    if not fc.get("headless", True) and _wait_for_manual_solve(page):
+        return
+    raise PermanentError(
+        f"{reason} — DỪNG phiên, KHÔNG tự giải bằng máy (ADR-002). headless=false có thể "
+        f"tự bấm giải trong cửa sổ trình duyệt; dùng mode=cdp bám Chrome thật đã đăng nhập "
+        f"cũng giúp giảm bị chặn."
+    )
+
+
+def _guard_checkpoint(page, fc: dict) -> None:
     u = (page.url or "").lower()
     # "sorry" = trang chặn bot của Google (google.com/sorry/index?...) — quan sát thật
     # khi tìm bằng trình duyệt tự động không có lịch sử duyệt web (ADR-012).
-    if any(x in u for x in ("checkpoint", "/login", "captcha", "verify", "/sorry/")):
-        raise PermanentError(
-            "gặp checkpoint/login/CAPTCHA/chặn-bot — DỪNG phiên, KHÔNG tự giải (ADR-002). "
-            "Với Google: dùng mode=cdp bám Chrome thật đã đăng nhập để giảm bị chặn."
-        )
-    # Chặn bởi CDN/WAF (Akamai/Cloudflare...) hoặc anti-bot ứng dụng GIỮ NGUYÊN url nên
-    # không bắt được ở trên — phải xét nội dung trang. Quan sát thật trên TikTok, mỗi lần
-    # một kiểu khác nhau: (1) Akamai "Access Denied", (2) trang chỉ còn menu điều hướng,
-    # rỗng nội dung, kèm "Something went wrong ... please try again" (ADR-012). Nội dung
-    # (kể cả trang chặn) render bằng JS — inner_text ngay sau goto đọc trúng lúc còn rỗng,
-    # phải chờ một nhịp mới đọc đúng.
+    if any(x in u for x in _CHECKPOINT_URL_HINTS):
+        _fail_or_pause(page, fc, "gặp checkpoint/login/CAPTCHA")
+        return
+    # Chặn GIỮ NGUYÊN url nên không bắt được qua URL — phải xét nội dung trang. Nội dung
+    # (kể cả trang chặn) render bằng JS — đọc ngay sau goto sẽ đọc trúng lúc còn rỗng,
+    # phải chờ một nhịp mới đúng (ADR-012).
     page.wait_for_timeout(1500)
     try:
         body = page.inner_text("body", timeout=3000).lower()
     except Exception:  # noqa: BLE001
         return
-    blocked = (
-        ("access denied" in body and ("edgesuite.net" in body or "reference #" in body))
-        or "something wrong with the server" in body
-    )
-    if blocked:
+    if any(h in body for h in _CHECKPOINT_CONTENT_HINTS):
+        _fail_or_pause(page, fc, "gặp CAPTCHA (Bing 'giải quyết thử thách' hoặc tương tự)")
+        return
+    if any(h in body for h in _HARD_BLOCK_CONTENT_HINTS) or (
+        "access denied" in body and ("edgesuite.net" in body or "reference #" in body)
+    ):
         raise PermanentError(
-            "gặp trang chặn bot (CDN/WAF hoặc anti-bot ứng dụng) — DỪNG phiên, KHÔNG tự "
-            "giải (ADR-002). Trình duyệt tự động bị phát hiện; dùng mode=cdp bám Chrome "
-            "thật có thể giảm nhưng KHÔNG đảm bảo hết bị chặn."
+            "gặp trang chặn hạ tầng (CDN/WAF, vd. Akamai 'Access Denied') — không có gì để "
+            "tự giải, DỪNG phiên (ADR-002). Trình duyệt tự động bị phát hiện; dùng mode=cdp "
+            "bám Chrome thật có thể giảm nhưng KHÔNG đảm bảo hết bị chặn."
         )
 
 
@@ -144,6 +182,13 @@ def _guard_search_login_wall(page, p: Platform) -> None:
         )
 
 
+# Máy tìm kiếm: chỉ giữ link trang ĐÍCH bên ngoài, loại link nội bộ máy tìm kiếm.
+_SEARCH_ENGINE_DOMAINS = {
+    "google": ("google.", "gstatic.", "googleusercontent."),
+    "bing": ("bing.", "microsoft.", "msn.", "live.com"),
+}
+
+
 def _unwrap_google_redirect(url: str) -> str:
     """Google đôi khi bọc link kết quả qua /url?q=<đích thật>&... (hoặc tham số 'url') —
     bóc URL đích ra. CHỈ áp dụng cho path "/url" (link bọc thật) — path khác (vd.
@@ -160,11 +205,11 @@ def _unwrap_google_redirect(url: str) -> str:
 
 def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
     page.goto(_mode_url(p, mode, value), wait_until="domcontentloaded")
-    if p.key in ("google", "youtube"):
+    if p.key in ("google", "youtube", "bing"):
         _dismiss_consent(page)
     if p.key in _SEARCH_LOGIN_WALL:
         page.wait_for_timeout(2500)  # nội dung (kể cả tường đăng nhập) render bằng JS
-    _guard_checkpoint(page)
+    _guard_checkpoint(page, fc)
     _guard_search_login_wall(page, p)
     hints = p.post_hints or ("/posts/",)
     urls: list[str] = []
@@ -174,14 +219,15 @@ def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
             # href có thể tương đối (vd. "/shorts/") — quy về URL tuyệt đối trước khi lưu,
             # nếu không page.goto() sau này sẽ báo "invalid URL" (không phải lỗi môi trường).
             full = urljoin(page.url, href)
-            if p.key == "google":
-                # Google đôi khi bọc link kết quả qua /url?q=<đích thật>&... — bóc URL đích
-                # ra trước khi lọc, nếu không sẽ loại nhầm cả kết quả thật (chứa "google."
-                # trong URL bọc dù đích đến là trang ngoài — ADR-012).
-                full = _unwrap_google_redirect(full)
-                # Máy tìm kiếm: chỉ lấy trang ĐÍCH bên ngoài, loại link nội bộ Google.
+            if p.key in _SEARCH_ENGINE_DOMAINS:
+                if p.key == "google":
+                    # Google đôi khi bọc link kết quả qua /url?q=<đích thật>&... — bóc URL
+                    # đích ra trước khi lọc, nếu không sẽ loại nhầm cả kết quả thật (chứa
+                    # "google." trong URL bọc dù đích đến là trang ngoài — ADR-012).
+                    full = _unwrap_google_redirect(full)
+                # Máy tìm kiếm: chỉ lấy trang ĐÍCH bên ngoài, loại link nội bộ máy tìm kiếm.
                 if (not full.startswith("http")
-                        or any(d in full for d in ("google.", "gstatic.", "googleusercontent."))):
+                        or any(d in full for d in _SEARCH_ENGINE_DOMAINS[p.key])):
                     continue
             elif not any(h in href for h in hints):
                 continue
@@ -250,7 +296,7 @@ def _goto_with_wayback_fallback(page, url: str) -> str:
 
 def _capture(conn, cfg: Config, topic_id: str, page, p: Platform, url: str, fc: dict) -> None:
     actual_url = _goto_with_wayback_fallback(page, url)
-    _guard_checkpoint(page)
+    _guard_checkpoint(page, fc)
     if fc["collect_comments"]:
         _expand_comments(page, fc["max_comments_per_post"])
     title = url.rstrip("/").rsplit("/", 1)[-1] or url
@@ -291,7 +337,7 @@ def collect(conn, cfg: Config, topic_id: str, platform_key: str, mode: str, valu
         try:
             urls = [value] if mode == "url" else _discover(page, p, mode, value, fc)
             for i, url in enumerate(urls):
-                _guard_checkpoint(page)
+                _guard_checkpoint(page, fc)
                 _capture(conn, cfg, topic_id, page, p, url, fc)
                 captured += 1
                 if i + 1 < len(urls):  # delay giữa các bài, không delay sau bài cuối
