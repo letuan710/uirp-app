@@ -44,6 +44,27 @@ def _guard_checkpoint(page) -> None:
             "gặp checkpoint/login/CAPTCHA/chặn-bot — DỪNG phiên, KHÔNG tự giải (ADR-002). "
             "Với Google: dùng mode=cdp bám Chrome thật đã đăng nhập để giảm bị chặn."
         )
+    # Chặn bởi CDN/WAF (Akamai/Cloudflare...) hoặc anti-bot ứng dụng GIỮ NGUYÊN url nên
+    # không bắt được ở trên — phải xét nội dung trang. Quan sát thật trên TikTok, mỗi lần
+    # một kiểu khác nhau: (1) Akamai "Access Denied", (2) trang chỉ còn menu điều hướng,
+    # rỗng nội dung, kèm "Something went wrong ... please try again" (ADR-012). Nội dung
+    # (kể cả trang chặn) render bằng JS — inner_text ngay sau goto đọc trúng lúc còn rỗng,
+    # phải chờ một nhịp mới đọc đúng.
+    page.wait_for_timeout(1500)
+    try:
+        body = page.inner_text("body", timeout=3000).lower()
+    except Exception:  # noqa: BLE001
+        return
+    blocked = (
+        ("access denied" in body and ("edgesuite.net" in body or "reference #" in body))
+        or "something wrong with the server" in body
+    )
+    if blocked:
+        raise PermanentError(
+            "gặp trang chặn bot (CDN/WAF hoặc anti-bot ứng dụng) — DỪNG phiên, KHÔNG tự "
+            "giải (ADR-002). Trình duyệt tự động bị phát hiện; dùng mode=cdp bám Chrome "
+            "thật có thể giảm nhưng KHÔNG đảm bảo hết bị chặn."
+        )
 
 
 _LAUNCH_ARGS = ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]

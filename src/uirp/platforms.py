@@ -49,7 +49,10 @@ _P: list[Platform] = [
              "Không cần đăng nhập để tìm/xem video công khai.", min_delay=3, max_delay=6),
     Platform("tiktok", "TikTok", "global", "https://www.tiktok.com", True,
              "https://www.tiktok.com/search?q={q}", "https://www.tiktok.com/@{v}",
-             None, ("/video/",), "Không bắt buộc đăng nhập để tìm/xem công khai."),
+             None, ("/video/",),
+             "Không bắt buộc đăng nhập, nhưng CDN Akamai chặn bot rất mạnh (đã xác nhận "
+             "thật: trang trả 'Access Denied' dù URL bình thường) — dùng mode=cdp bám "
+             "Chrome thật có thể giảm nhưng không đảm bảo hết bị chặn."),
     Platform("instagram", "Instagram", "global", "https://www.instagram.com", True,
              None, "https://www.instagram.com/{v}/", None, ("/p/", "/reel/"),
              "BẮT BUỘC đăng nhập — chặn xem hầu hết nội dung với khách vãng lai. "
