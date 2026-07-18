@@ -302,7 +302,9 @@ class _Handler(BaseHTTPRequestHandler):
                     tid = new_id("top")
                     db.insert(conn, "topic", {"id": tid, "name": keyword,
                               "description": None, "status": "active", "created_at": _now()})
-                targets = [p for p in platforms.all_platforms() if p.auto and p.search_url]
+                only = set(self.cfg.fetch.get("enabled_platforms") or [])
+                targets = [p for p in platforms.all_platforms()
+                           if p.auto and p.search_url and (not only or p.key in only)]
                 _STOP.clear()
                 with _SCAN_LOCK:
                     _SCAN.clear()

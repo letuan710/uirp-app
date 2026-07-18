@@ -212,8 +212,14 @@ def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
     _guard_checkpoint(page, fc)
     _guard_search_login_wall(page, p)
     hints = p.post_hints or ("/posts/",)
+    # max_posts_per_run <= 0 → KHÔNG giới hạn: cuộn tới khi trang cạn kết quả mới.
+    cap = fc["max_posts_per_run"]
+    unlimited = cap is None or cap <= 0
+    max_scrolls = 200 if unlimited else max(fc["scroll_depth"], 1)
     urls: list[str] = []
-    for _ in range(fc["scroll_depth"]):
+    stale = 0  # số vòng cuộn LIÊN TIẾP không ra link mới → coi là trang đã cạn
+    for _ in range(max_scrolls):
+        before = len(urls)
         for a in page.query_selector_all("a[href]"):
             href = a.get_attribute("href") or ""
             # href có thể tương đối (vd. "/shorts/") — quy về URL tuyệt đối trước khi lưu,
@@ -233,11 +239,15 @@ def _discover(page, p: Platform, mode: str, value: str, fc: dict) -> list[str]:
                 continue
             if full not in urls:
                 urls.append(full)
-        if len(urls) >= fc["max_posts_per_run"]:
+        if not unlimited and len(urls) >= cap:
+            break
+        # Không giới hạn: dừng khi 3 vòng cuộn liên tiếp không thêm được link nào (cạn trang).
+        stale = stale + 1 if len(urls) == before else 0
+        if unlimited and stale >= 3:
             break
         page.mouse.wheel(0, 3000)
         page.wait_for_timeout(int(random.uniform(1500, 3500)))
-    return urls[: fc["max_posts_per_run"]]
+    return urls if unlimited else urls[:cap]
 
 
 def _expand_comments(page, maxc: int) -> None:

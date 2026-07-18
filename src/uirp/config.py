@@ -34,6 +34,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "min_delay_seconds": 20, "max_delay_seconds": 60,
         # Số thread quét song song (mỗi thread 1 nền tảng, profile trình duyệt riêng).
         "parallel_platforms": 3,
+        # Chỉ tìm trên các nền tảng này (danh sách key). RỖNG [] = tất cả nền auto.
+        # Owner tạm giới hạn — đổi/để rỗng trong config.toml để bật lại.
+        "enabled_platforms": [],
     },
 }
 
